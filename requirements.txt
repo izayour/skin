@@ -2,6 +2,3 @@ flask
 waitress
 numpy
 opencv-python-headless
-torch
-torchvision
-segmentation-models-pytorch

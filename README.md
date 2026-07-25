@@ -12,9 +12,9 @@ and reports the lesion's real size in millimetres.
 
 ## How it works
 
-1. **Lesion** — a U-Net locates and segments the mole (with a classical
-   dark-spot detector to find candidates), falling back to a user-drawn box
-   and then a hand-tapped border.
+1. **Lesion** — you draw a box around the lesion and a classical
+   (darkness-based) detector segments it; if that misses, tap the border
+   point by point.
 2. **Ruler** — the ruler is located below the lesion; the two centimetre
    ticks nearest the lesion give the pixels-per-centimetre scale. Fallbacks:
    draw a box around the ruler, or tap the two 1 cm marks yourself.
@@ -22,6 +22,11 @@ and reports the lesion's real size in millimetres.
 
 If the photo is too out of focus to read the ruler, the app says so and
 asks for a sharper retake.
+
+This build uses **no machine-learning model** — everything is classical
+OpenCV, so it's small and runs on any free host. An optional U-Net that
+auto-locates the lesion lives on the **`with-ai`** branch (heavier: needs
+PyTorch and a 25 MB model).
 
 ## Run it locally
 
@@ -33,22 +38,17 @@ python app.py
 Then open **http://localhost:5050** on the same computer, or
 **http://<that-computer's-LAN-IP>:5050** on a phone on the same Wi-Fi.
 
-The model weights (`unet_lesion.pt`, ~25 MB) ship in this repo. To point at
-a different file, set the `UNET_WEIGHTS` environment variable.
-
 ## Deploy (public link, no PC required)
 
-The app reads `$PORT` and serves via `waitress`, so it runs on any Python
-host — e.g. Hugging Face Spaces (Docker), Render, Railway, or Fly.io. A
-sample `half.jpg` is included for a quick demo; users upload their own
-photos.
+The app reads `$PORT` and serves via `waitress`, so it runs on any free
+Python host — Render, Railway, Fly.io, or Hugging Face Spaces. A sample
+`half.jpg` is included for a quick demo; users upload their own photos.
 
 ## Files
 
 - `app.py` — Flask server + web UI endpoints
 - `templates/index.html` — the mobile web UI
-- `lesion_cascade.py` — U-Net + classical + manual lesion detection
+- `lesion_cascade.py` — lesion detection tiers (classical + manual here)
 - `lesion_detector_interactive.py` — classical darkness-based segmentation
 - `ruler_detector_interactive.py` — ruler / centimetre-tick detection
-- `unet_lesion.pt` — trained U-Net weights
 - `half.jpg` — sample demo image

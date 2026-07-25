@@ -20,7 +20,7 @@ import cv2
 import numpy as np
 from flask import Flask, jsonify, render_template, request, send_file
 
-from lesion_cascade import detect_unet, UNET_WEIGHTS_DEFAULT, MIN_AREA_PX
+from lesion_cascade import MIN_AREA_PX
 from lesion_detector_interactive import LesionDetector
 from ruler_detector_interactive import RulerDetector
 
@@ -224,13 +224,13 @@ def api_upload():
     if image is None:
         return jsonify({"ok": False, "error": "could not decode image"}), 400
     sid = _store(image)
-    contour = detect_unet(image, UNET_WEIGHTS_DEFAULT)
-    if contour is None:
-        s = STORE[sid]["scale"]
-        disp = cv2.resize(image, None, fx=s, fy=s) if s < 1.0 else image
-        return jsonify({"ok": False, "id": sid, "method": "unet",
-                        "display": _jpeg_b64(disp)})
-    return _respond_with_contour(sid, contour, "unet")
+    # No automatic (AI) lesion detection in this build: go straight to the
+    # user drawing a box around the lesion, which the classical detector then
+    # segments (with a hand-tapped border as the final fallback).
+    s = STORE[sid]["scale"]
+    disp = cv2.resize(image, None, fx=s, fy=s) if s < 1.0 else image
+    return jsonify({"ok": False, "id": sid, "method": "manual-start",
+                    "display": _jpeg_b64(disp)})
 
 
 @app.get("/api/display/<sid>")
