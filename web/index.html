@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Skin Lesion Scanner</title>
+<style>
+  body { margin:0; font-family:system-ui,sans-serif; background:#111; color:#eee; }
+  header { padding:14px 16px; background:#1b5e20; font-weight:600; }
+  main { padding:16px; max-width:720px; margin:0 auto; }
+  #status { padding:10px 12px; border-radius:8px; background:#1d1d1d; font-size:14px; }
+  canvas { max-width:100%; border-radius:8px; display:block; margin-top:12px; }
+</style>
+</head>
+<body>
+<header>Skin Lesion Scanner</header>
+<main>
+  <div id="status">Loading OpenCV.js…</div>
+  <canvas id="c" width="8" height="8"></canvas>
+</main>
+
+<script>
+// OpenCV.js calls this when the WASM runtime is ready.
+function onOpenCvReady() {
+  const s = document.getElementById("status");
+  try {
+    // smoke test the real building block: RGB->Lab (the ruler thresholds use Lab a).
+    const m = cv.matFromArray(1, 1, cv.CV_8UC4, [120, 60, 30, 255]); // rgba
+    const rgb = new cv.Mat(); cv.cvtColor(m, rgb, cv.COLOR_RGBA2RGB);
+    const lab = new cv.Mat(); cv.cvtColor(rgb, lab, cv.COLOR_RGB2Lab);
+    const px = lab.ucharPtr(0, 0);
+    s.textContent = `OpenCV.js ready ✓  RGB(120,60,30) -> Lab L${px[0]} a${px[1]} b${px[2]}`;
+    m.delete(); rgb.delete(); lab.delete();
+  } catch (e) {
+    s.textContent = "OpenCV loaded but smoke test failed: " + e;
+  }
+}
+</script>
+<script async src="vendor/opencv.js" onload="if(cv.getBuildInformation){onOpenCvReady()}else{cv['onRuntimeInitialized']=onOpenCvReady}"></script>
+</body>
+</html>

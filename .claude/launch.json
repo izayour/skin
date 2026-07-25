@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web-static",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "5060", "--directory", "web"],
+      "port": 5060
+    }
+  ]
+}
