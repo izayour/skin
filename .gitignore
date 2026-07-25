@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+# scratch/output overlays
+scratch_*
+debug_*
+overlay_*
+*_result.jpg
