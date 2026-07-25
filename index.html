@@ -5,36 +5,136 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Skin Lesion Scanner</title>
 <style>
+  * { box-sizing: border-box; }
   body { margin:0; font-family:system-ui,sans-serif; background:#111; color:#eee; }
-  header { padding:14px 16px; background:#1b5e20; font-weight:600; }
+  header { padding:14px 16px; background:#1b5e20; font-weight:600; font-size:18px; }
   main { padding:16px; max-width:720px; margin:0 auto; }
-  #status { padding:10px 12px; border-radius:8px; background:#1d1d1d; font-size:14px; }
-  canvas { max-width:100%; border-radius:8px; display:block; margin-top:12px; }
+  .card { background:#1d1d1d; border-radius:12px; padding:16px; margin-bottom:16px; }
+  button { border:0; border-radius:10px; padding:14px 18px; font-size:16px; font-weight:600;
+           color:#fff; background:#2e7d32; width:100%; margin-top:10px; }
+  button.secondary { background:#37474f; }
+  button:disabled { opacity:.4; }
+  .row { display:flex; gap:10px; } .row button { flex:1; }
+  canvas { width:100%; border-radius:10px; display:block; touch-action:none; }
+  .hint { font-size:14px; color:#9e9e9e; margin:6px 0 0; }
+  .stats { font-size:14px; color:#bbb; margin-top:10px; line-height:1.6; }
+  .badge { display:inline-block; padding:2px 10px; border-radius:999px; background:#333;
+           font-size:13px; margin-bottom:8px; }
+  #status { font-size:13px; color:#9e9e9e; }
+  .hidden { display:none; }
 </style>
 </head>
 <body>
 <header>Skin Lesion Scanner</header>
 <main>
-  <div id="status">Loading OpenCV.js…</div>
-  <canvas id="c" width="8" height="8"></canvas>
+  <div id="status" class="card">Loading OpenCV.js…</div>
+
+  <section id="stage-capture" class="card hidden">
+    <p class="hint">Take or choose a photo of the lesion.</p>
+    <input id="file" type="file" accept="image/*" capture="environment" class="hidden">
+    <button onclick="document.getElementById('file').click()">Take / choose photo</button>
+    <button class="secondary" id="demo">Try the demo photo</button>
+  </section>
+
+  <div id="spinner" class="card hidden">Working…</div>
+
+  <section id="stage-box" class="card hidden">
+    <span class="badge">Draw a box around the lesion</span>
+    <canvas id="canvas"></canvas>
+    <p class="hint">Drag a rectangle around the lesion, then Detect.</p>
+    <div class="row">
+      <button id="detect" disabled>Detect lesion</button>
+      <button id="rebox" class="secondary">New photo</button>
+    </div>
+  </section>
+
+  <section id="stage-result" class="card hidden">
+    <span class="badge">Result</span>
+    <canvas id="rcanvas"></canvas>
+    <div class="stats" id="rstats"></div>
+    <p class="hint">Ruler-based mm measurement is coming next; this shows the
+      lesion outline and pixel size.</p>
+    <button id="restart" class="secondary">New photo</button>
+  </section>
 </main>
 
+<script src="js/pipeline.js"></script>
 <script>
-// OpenCV.js calls this when the WASM runtime is ready.
+let cvReady = false, img = new Image(), box = null, dragging = false;
+const $ = id => document.getElementById(id);
+const STAGES = ["stage-capture","stage-box","stage-result","spinner"];
+const show = id => STAGES.forEach(s => $(s).classList.toggle("hidden", s !== id));
+
 function onOpenCvReady() {
-  const s = document.getElementById("status");
-  try {
-    // smoke test the real building block: RGB->Lab (the ruler thresholds use Lab a).
-    const m = cv.matFromArray(1, 1, cv.CV_8UC4, [120, 60, 30, 255]); // rgba
-    const rgb = new cv.Mat(); cv.cvtColor(m, rgb, cv.COLOR_RGBA2RGB);
-    const lab = new cv.Mat(); cv.cvtColor(rgb, lab, cv.COLOR_RGB2Lab);
-    const px = lab.ucharPtr(0, 0);
-    s.textContent = `OpenCV.js ready ✓  RGB(120,60,30) -> Lab L${px[0]} a${px[1]} b${px[2]}`;
-    m.delete(); rgb.delete(); lab.delete();
-  } catch (e) {
-    s.textContent = "OpenCV loaded but smoke test failed: " + e;
-  }
+  cvReady = true;
+  $("status").textContent = "Ready.";
+  show("stage-capture");
 }
+
+// ---- load a photo (file or demo) ----
+$("file").addEventListener("change", e => { if (e.target.files[0]) loadFrom(URL.createObjectURL(e.target.files[0])); });
+$("demo").onclick = () => loadFrom("half.jpg");
+function loadFrom(src) {
+  img = new Image();
+  img.onload = () => {
+    const c = $("canvas"); c.width = img.naturalWidth; c.height = img.naturalHeight;
+    c.getContext("2d").drawImage(img, 0, 0);
+    box = null; $("detect").disabled = true;
+    show("stage-box");
+  };
+  img.src = src;
+}
+
+// ---- draw a box (pointer coords -> image coords) ----
+function pos(c, ev) {
+  const r = c.getBoundingClientRect();
+  return [(ev.clientX - r.left) * c.width / r.width, (ev.clientY - r.top) * c.height / r.height];
+}
+function redraw() {
+  const c = $("canvas"), g = c.getContext("2d");
+  g.drawImage(img, 0, 0);
+  if (box) { g.strokeStyle = "#00e676"; g.lineWidth = Math.max(3, c.width / 300);
+    g.strokeRect(box[0], box[1], box[2]-box[0], box[3]-box[1]); }
+}
+$("canvas").addEventListener("pointerdown", ev => { const [x,y]=pos($("canvas"),ev); box=[x,y,x,y]; dragging=true; ev.preventDefault(); });
+$("canvas").addEventListener("pointermove", ev => { if(!dragging)return; const [x,y]=pos($("canvas"),ev); box[2]=x; box[3]=y; redraw(); ev.preventDefault(); });
+$("canvas").addEventListener("pointerup", () => { dragging=false;
+  if (box && Math.abs(box[2]-box[0])>10 && Math.abs(box[3]-box[1])>10) $("detect").disabled=false; });
+
+// ---- detect ----
+$("detect").onclick = () => {
+  const x=Math.round(Math.min(box[0],box[2])), y=Math.round(Math.min(box[1],box[3]));
+  const w=Math.round(Math.abs(box[2]-box[0])), h=Math.round(Math.abs(box[3]-box[1]));
+  show("spinner");
+  setTimeout(() => {                        // let the spinner paint before the heavy work
+    const src = cv.imread($("canvas"));     // full-res RGBA
+    const bgKsize = Math.max(31, Math.floor(Math.min(w,h)*0.9)) | 1;
+    let res = null;
+    try { res = segmentLesion(src, {x,y,w,h}, bgKsize); }
+    catch (e) { $("status").textContent = "detect error: " + e; }
+    src.delete();
+    if (!res) { alert("No lesion found in that box — try a tighter box."); show("stage-box"); return; }
+    showResult(res);
+  }, 30);
+};
+
+function showResult(res) {
+  const c = $("rcanvas"); c.width = img.naturalWidth; c.height = img.naturalHeight;
+  const g = c.getContext("2d");
+  g.drawImage(img, 0, 0);
+  g.strokeStyle = "#00e676"; g.lineWidth = Math.max(3, c.width/300);
+  g.beginPath();
+  res.points.forEach((p,i)=> i? g.lineTo(p[0],p[1]) : g.moveTo(p[0],p[1]));
+  g.closePath(); g.stroke();
+  g.fillStyle = "#ff1744";
+  g.beginPath(); g.arc(res.centroid[0],res.centroid[1],Math.max(4,c.width/250),0,7); g.fill();
+  $("rstats").innerHTML = `Area: ${Math.round(res.areaPx).toLocaleString()} px<br>` +
+    `Centroid: (${res.centroid[0]}, ${res.centroid[1]})<br>` +
+    `Bounding box: ${res.bbox[2]} &times; ${res.bbox[3]} px`;
+  show("stage-result");
+  window.lastResult = res;                  // for debugging
+}
+$("rebox").onclick = $("restart").onclick = () => { $("file").value=""; show("stage-capture"); };
 </script>
 <script async src="vendor/opencv.js" onload="if(cv.getBuildInformation){onOpenCvReady()}else{cv['onRuntimeInitialized']=onOpenCvReady}"></script>
 </body>
