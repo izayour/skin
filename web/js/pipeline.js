@@ -80,8 +80,12 @@ function smoothMask(mask) {                // round jagged staircase edges
   return out;
 }
 
-// pick the most lesion-like blob: weighted size + compactness + centrality
-function pickBlob(mask, opts) {
+// pick the most lesion-like blob: weighted size + compactness + centrality.
+// excludeSpanning skips blobs spanning nearly the whole box — used on retry
+// after a leak (a box-spanning pick is usually skin/ruler/shadow), but not by
+// default: a legitimate coarse seed can span the box and still refine down to
+// the lesion correctly.
+function pickBlob(mask, opts, excludeSpanning) {
   const h = mask.rows, w = mask.cols, imgArea = h * w;
   const cx0 = w / 2, cy0 = h / 2, diag = Math.hypot(cx0, cy0);
   const minArea = Math.max(80, opts.minAreaFrac * imgArea);
@@ -92,15 +96,19 @@ function pickBlob(mask, opts) {
     const c = contours.get(i);
     const area = cv.contourArea(c), frac = area / imgArea;
     if (area >= minArea && frac <= opts.maxAreaFrac) {
-      const perim = cv.arcLength(c, true) + 1e-6;
-      const compactness = 4 * Math.PI * area / (perim * perim);
-      const m = cv.moments(c);
-      const cx = m.m10 / (m.m00 + 1e-6), cy = m.m01 / (m.m00 + 1e-6);
-      const centrality = 1 - Math.hypot(cx - cx0, cy - cy0) / diag;
-      const score = (1 - opts.compactnessWeight - opts.centerWeight) * frac
-                  + opts.compactnessWeight * compactness
-                  + opts.centerWeight * centrality;
-      if (score > bestScore) { bestScore = score; best = cntPoints(c); }
+      const bb = cv.boundingRect(c);
+      const spans = bb.width >= 0.95 * w || bb.height >= 0.95 * h;
+      if (!(excludeSpanning && spans)) {
+        const perim = cv.arcLength(c, true) + 1e-6;
+        const compactness = 4 * Math.PI * area / (perim * perim);
+        const m = cv.moments(c);
+        const cx = m.m10 / (m.m00 + 1e-6), cy = m.m01 / (m.m00 + 1e-6);
+        const centrality = 1 - Math.hypot(cx - cx0, cy - cy0) / diag;
+        const score = (1 - opts.compactnessWeight - opts.centerWeight) * frac
+                    + opts.compactnessWeight * compactness
+                    + opts.centerWeight * centrality;
+        if (score > bestScore) { bestScore = score; best = cntPoints(c); }
+      }
     }
     c.delete();
   }
@@ -143,12 +151,35 @@ function localOtsuRefine(darkness, blobPts) {
   return refined;
 }
 
-// ---- public entry point --------------------------------------------------
-// src: cv.Mat RGBA (full image). roi: {x,y,w,h} full-image px. bgKsize: int.
-// returns {points:[[x,y]... full coords], areaPx, centroid:[x,y], bbox:[x,y,w,h]} or null
-function segmentLesion(src, roi, bgKsize, opts) {
-  opts = Object.assign({ blur: 5, minAreaFrac: 0.002, maxAreaFrac: 0.95,
-                         compactnessWeight: 0.35, centerWeight: 0.25 }, opts || {});
+// build the result record from full-image contour points
+function resultFromPts(pts) {
+  const area = polyArea(pts);
+  let sx = 0, sy = 0;
+  for (const [x, y] of pts) { sx += x; sy += y; }
+  const cx = Math.round(sx / pts.length), cy = Math.round(sy / pts.length);
+  let mnx = 1e9, mny = 1e9, mxx = -1e9, mxy = -1e9;
+  for (const [x, y] of pts) {
+    mnx = Math.min(mnx, x); mny = Math.min(mny, y);
+    mxx = Math.max(mxx, x); mxy = Math.max(mxy, y);
+  }
+  return { points: pts, areaPx: area, centroid: [cx, cy],
+           bbox: [mnx, mny, mxx - mnx, mxy - mny] };
+}
+
+// smooth a ROI-local point polygon and return smoothed ROI-local points
+function smoothPolygon(pts, rows, cols) {
+  const filled = cv.Mat.zeros(rows, cols, cv.CV_8UC1);
+  fillPoly(filled, pts, 255);
+  const smooth = smoothMask(filled);
+  const out = largestContour(smooth);
+  filled.delete(); smooth.delete();
+  return out;
+}
+
+// one segmentation attempt inside roi. Returns:
+//   { result, seedPtsFull }  — result null on failure/leak; seedPtsFull is the
+//   picked seed blob in full-image coords (for retry/salvage), or null.
+function segmentOnce(src, roi, bgKsize, opts, excludeSpanning) {
   const rect = new cv.Rect(roi.x, roi.y, roi.w, roi.h);
   const work = src.roi(rect).clone();
   const rgb = new cv.Mat(), lab = new cv.Mat(), chans = new cv.MatVector();
@@ -163,49 +194,76 @@ function segmentLesion(src, roi, bgKsize, opts) {
   const seed = cleanMask(im);
   im.delete();
 
-  let result = null;
-  window.__segReason = "no dark blob found in the box";
-  const blob = pickBlob(seed, opts);
+  let result = null, seedPtsFull = null;
+  const blob = pickBlob(seed, opts, excludeSpanning);
   if (blob) {
+    seedPtsFull = blob.map(([x, y]) => [x + roi.x, y + roi.y]);
     window.__segReason = "refinement produced no contour";
     const refined = localOtsuRefine(darkness, blob);
-    let cpts = largestContour(refined);
+    const cpts = largestContour(refined);
     if (cpts) {
-      const filled = cv.Mat.zeros(refined.rows, refined.cols, cv.CV_8UC1);
-      fillPoly(filled, cpts, 255);
-      const smooth = smoothMask(filled);
-      const finalPts = largestContour(smooth);
-      if (finalPts && cv.countNonZero(smooth) > 0) {
-        // offset ROI-local -> full-image coords
+      const finalPts = smoothPolygon(cpts, refined.rows, refined.cols);
+      if (finalPts) {
         const pts = finalPts.map(([x, y]) => [x + roi.x, y + roi.y]);
-        const area = polyArea(pts);
-        let sx = 0, sy = 0;
-        for (const [x, y] of pts) { sx += x; sy += y; }
-        const cx = Math.round(sx / pts.length), cy = Math.round(sy / pts.length);
-        let mnx = 1e9, mny = 1e9, mxx = -1e9, mxy = -1e9;
-        for (const [x, y] of pts) {
-          mnx = Math.min(mnx, x); mny = Math.min(mny, y);
-          mxx = Math.max(mxx, x); mxy = Math.max(mxy, y);
-        }
-        // Leak guard: a real lesion is contained within the drawn box, so if
-        // the final blob spans nearly the whole box it has bled into skin /
-        // ruler / shadow — reject it (caller asks for a tighter box) rather
-        // than report a grossly inflated size.
-        const spans = (mxx - mnx) >= 0.95 * roi.w || (mxy - mny) >= 0.95 * roi.h;
-        if (spans) {
-          window.__segReason = "outline filled the whole box (leak) — draw a tighter box";
-        } else {
-          window.__segReason = "ok";
-          result = { points: pts, areaPx: area, centroid: [cx, cy],
-                     bbox: [mnx, mny, mxx - mnx, mxy - mny] };
-        }
+        const r = resultFromPts(pts);
+        // a real lesion is contained in the box; a box-spanning outline leaked
+        const spans = r.bbox[2] >= 0.95 * roi.w || r.bbox[3] >= 0.95 * roi.h;
+        if (spans) window.__segReason = "outline filled the box (leak)";
+        else { window.__segReason = "ok"; result = r; }
       }
-      filled.delete(); smooth.delete();
     }
     refined.delete();
+  } else {
+    window.__segReason = "no dark blob found in the box";
   }
 
   work.delete(); rgb.delete(); lab.delete(); chans.delete();
   gray.delete(); darkness.delete(); seed.delete();
-  return result;
+  return { result, seedPtsFull };
+}
+
+// ---- public entry point --------------------------------------------------
+// src: cv.Mat RGBA (full image). roi: {x,y,w,h} full-image px. bgKsize: int.
+// Multi-attempt: (1) segment in the drawn box; (2) if that fails/leaks but a
+// seed blob was found, shrink the box to the blob's padded bbox and retry —
+// this self-normalizes a too-loose box, so results depend far less on how the
+// user drew it; (3) as a last resort use the seed blob's own outline.
+// returns {points:[[x,y]... full], areaPx, centroid, bbox} or null
+function segmentLesion(src, roi, bgKsize, opts) {
+  opts = Object.assign({ blur: 5, minAreaFrac: 0.002, maxAreaFrac: 0.95,
+                         compactnessWeight: 0.35, centerWeight: 0.25 }, opts || {});
+  // attempt 1: as drawn
+  const a1 = segmentOnce(src, roi, bgKsize, opts, false);
+  if (a1.result) return a1.result;
+
+  // attempt 1b: the picked blob led to a leak/failure — retry ignoring
+  // box-spanning blobs so a compact lesion blob can win instead
+  const a1b = segmentOnce(src, roi, bgKsize, opts, true);
+  if (a1b.result) { window.__segReason = "ok (ignored box-spanning blob)"; return a1b.result; }
+
+  let bestSeed = a1b.seedPtsFull || a1.seedPtsFull;
+  if (bestSeed) {
+    // attempt 2: shrink to the seed blob's bbox + 60% margin, retry there
+    const sb = resultFromPts(bestSeed).bbox;
+    const mx = Math.round(sb[2] * 0.6), my = Math.round(sb[3] * 0.6);
+    const nx = Math.max(0, sb[0] - mx), ny = Math.max(0, sb[1] - my);
+    const nw = Math.min(src.cols - nx, sb[2] + 2 * mx);
+    const nh = Math.min(src.rows - ny, sb[3] + 2 * my);
+    if (nw > 20 && nh > 20 && (nw < roi.w * 0.95 || nh < roi.h * 0.95)) {
+      const bg2 = Math.max(31, Math.floor(Math.min(nw, nh) * 0.9)) | 1;
+      const a2 = segmentOnce(src, { x: nx, y: ny, w: nw, h: nh }, bg2, opts, false);
+      if (a2.result) { window.__segReason = "ok (auto-tightened box)"; return a2.result; }
+      if (a2.seedPtsFull) bestSeed = a2.seedPtsFull;
+    }
+    // attempt 3: salvage — the seed blob's own outline, smoothed
+    const r = resultFromPts(bestSeed);
+    const spans = r.bbox[2] >= 0.95 * roi.w || r.bbox[3] >= 0.95 * roi.h;
+    if (!spans && r.areaPx >= 80) {
+      const local = bestSeed.map(([x, y]) => [x - roi.x, y - roi.y]);
+      const sm = smoothPolygon(local, roi.h, roi.w);
+      window.__segReason = "ok (salvaged seed outline)";
+      return sm ? resultFromPts(sm.map(([x, y]) => [x + roi.x, y + roi.y])) : r;
+    }
+  }
+  return null;                             // __segReason left from last failure
 }
