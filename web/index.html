@@ -46,6 +46,15 @@
     <canvas id="canvas"></canvas>
     <div class="row"><button id="detect" disabled>Detect lesion</button>
       <button id="rebox" class="secondary">New photo</button></div>
+    <button id="ltrace" class="secondary">Trace the border myself</button>
+  </section>
+
+  <section id="stage-lmanual" class="card hidden">
+    <span class="badge">Tap points around the lesion border</span>
+    <canvas id="lmcanvas"></canvas>
+    <p class="hint">Tap around the edge in order; at least 3 points.</p>
+    <div class="row"><button id="lm-done" disabled>Done</button>
+      <button id="lm-undo" class="secondary">Undo</button></div>
   </section>
 
   <section id="stage-review" class="card hidden">
@@ -86,12 +95,12 @@
   </section>
 </main>
 
-<script src="js/pipeline.js?v=3"></script>
-<script src="js/ruler.js?v=3"></script>
+<script src="js/pipeline.js?v=4"></script>
+<script src="js/ruler.js?v=4"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
-const STAGES=["stage-capture","stage-box","stage-review","stage-rulerbox","stage-ticks","stage-blurry","stage-final","spinner"];
+const STAGES=["stage-capture","stage-box","stage-lmanual","stage-review","stage-rulerbox","stage-ticks","stage-blurry","stage-final","spinner"];
 const show=id=>STAGES.forEach(s=>$(s).classList.toggle("hidden",s!==id));
 const defer=fn=>{show("spinner");setTimeout(fn,30);};   // let spinner paint before heavy work
 function onOpenCvReady(){cvReady=true;$("status").textContent="Ready.";show("stage-capture");}
@@ -120,9 +129,30 @@ $("detect").onclick=()=>defer(()=>{
   const bg=Math.max(31,Math.floor(Math.min(w,h)*0.9))|1;
   let res=null; try{res=segmentLesion(src,{x,y,w,h},bg);}catch(e){$("status").textContent="err "+e;}
   src.delete();
-  if(!res){alert("No lesion found in that box — try a tighter box.");show("stage-box");return;}
+  if(!res){alert("Couldn't detect the lesion — draw a tighter box, or tap 'Trace the border myself'.");show("stage-box");return;}
   lesion=res; showReview();
 });
+
+// ---------- manual: trace the lesion border ----------
+let lmpts=[];
+function startLManual(){drawImgTo($("lmcanvas"));lmpts=[];$("lm-done").disabled=true;show("stage-lmanual");}
+$("ltrace").onclick=()=>startLManual();
+function redrawLM(){const c=$("lmcanvas"),g=c.getContext("2d");g.drawImage(img,0,0);
+  g.fillStyle="#00e676";g.strokeStyle="#00e676";g.lineWidth=LW(c);
+  if(lmpts.length>1){g.beginPath();g.moveTo(lmpts[0][0],lmpts[0][1]);
+    lmpts.slice(1).forEach(p=>g.lineTo(p[0],p[1]));g.stroke();}
+  lmpts.forEach(p=>{g.beginPath();g.arc(p[0],p[1],DOT(c),0,7);g.fill();});}
+$("lmcanvas").addEventListener("pointerdown",ev=>{lmpts.push(pos($("lmcanvas"),ev));$("lm-done").disabled=lmpts.length<3;redrawLM();ev.preventDefault();});
+$("lm-undo").onclick=()=>{lmpts.pop();$("lm-done").disabled=lmpts.length<3;redrawLM();};
+$("lm-done").onclick=()=>{
+  const pts=lmpts.slice();
+  const area=polyArea(pts);
+  let sx=0,sy=0; pts.forEach(p=>{sx+=p[0];sy+=p[1];});
+  let mnx=1e9,mny=1e9,mxx=-1e9,mxy=-1e9;
+  pts.forEach(p=>{mnx=Math.min(mnx,p[0]);mny=Math.min(mny,p[1]);mxx=Math.max(mxx,p[0]);mxy=Math.max(mxy,p[1]);});
+  lesion={points:pts,areaPx:area,centroid:[Math.round(sx/pts.length),Math.round(sy/pts.length)],bbox:[mnx,mny,mxx-mnx,mxy-mny]};
+  showReview();
+};
 
 // ---------- lesion review ----------
 function drawLesion(g,c){g.strokeStyle="#00e676";g.lineWidth=LW(c);g.beginPath();
