@@ -37,6 +37,11 @@
     <button onclick="document.getElementById('file').click()">Take / choose photo</button>
     <button class="secondary" id="demo">Try the demo photo</button>
     <p class="disclaimer">Not a medical device. For demonstration only — does not diagnose.</p>
+    <div id="faillog-row" class="hidden" style="margin-top:10px">
+      <span class="hint"><span id="faillog-count">0</span> failed detection(s) logged.</span>
+      <div class="row"><button id="faillog-copy" class="secondary">Copy failure log</button>
+        <button id="faillog-clear" class="secondary">Clear</button></div>
+    </div>
   </section>
 
   <div id="spinner" class="card hidden">Working…</div>
@@ -95,23 +100,24 @@
   </section>
 </main>
 
-<script src="js/pipeline.js?v=9"></script>
-<script src="js/ruler.js?v=9"></script>
+<script src="js/pipeline.js?v=12"></script>
+<script src="js/ruler.js?v=12"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
 const STAGES=["stage-capture","stage-box","stage-lmanual","stage-review","stage-rulerbox","stage-ticks","stage-blurry","stage-final","spinner"];
 const show=id=>STAGES.forEach(s=>$(s).classList.toggle("hidden",s!==id));
 const defer=fn=>{show("spinner");setTimeout(fn,30);};   // let spinner paint before heavy work
-function onOpenCvReady(){cvReady=true;$("status").textContent="Ready.";show("stage-capture");}
+function onOpenCvReady(){cvReady=true;$("status").textContent="Ready.";show("stage-capture");updateFailUI();}
+let imgName="(none)";
 
 function pos(c,ev){const r=c.getBoundingClientRect();return [(ev.clientX-r.left)*c.width/r.width,(ev.clientY-r.top)*c.height/r.height];}
 function drawImgTo(c){c.width=img.naturalWidth;c.height=img.naturalHeight;c.getContext("2d").drawImage(img,0,0);}
 const LW=c=>Math.max(3,c.width/300), DOT=c=>Math.max(4,c.width/250);
 
 // ---------- load photo ----------
-$("file").addEventListener("change",e=>{if(e.target.files[0])loadFrom(URL.createObjectURL(e.target.files[0]));});
-$("demo").onclick=()=>loadFrom("half.jpg");
+$("file").addEventListener("change",e=>{if(e.target.files[0]){imgName=e.target.files[0].name;loadFrom(URL.createObjectURL(e.target.files[0]));}});
+$("demo").onclick=()=>{imgName="demo:half.jpg";loadFrom("half.jpg");};
 function loadFrom(src){img=new Image();img.onload=()=>{lbox=null;drawImgTo($("canvas"));$("detect").disabled=true;show("stage-box");};img.src=src;}
 
 // ---------- stage 1: lesion box ----------
@@ -129,9 +135,38 @@ $("detect").onclick=()=>defer(()=>{
   const bg=Math.max(31,Math.floor(Math.min(w,h)*0.9))|1;
   let res=null; try{res=segmentLesion(src,{x,y,w,h},bg);}catch(e){$("status").textContent="err "+e;}
   src.delete();
-  if(!res){alert("Couldn't detect the lesion ("+(window.__segReason||"?")+")\nbox="+JSON.stringify([x,y,w,h])+"\nDraw a tighter box, or tap 'Trace the border myself'.");show("stage-box");return;}
+  if(!res){
+    logFailure([x,y,w,h]);
+    alert("Couldn't detect the lesion ("+(window.__segReason||"?")+")\nbox="+JSON.stringify([x,y,w,h])+"\n(logged for analysis)\nDraw a tighter box, or tap 'Trace the border myself'.");
+    show("stage-box");return;
+  }
   lesion=res; showReview();
 });
+
+// ---------- failure log (localStorage, for offline analysis) ----------
+function logFailure(box){
+  try{
+    const log=JSON.parse(localStorage.getItem("faillog")||"[]");
+    log.push({t:new Date().toISOString(), img:imgName,
+              imgW:img.naturalWidth, imgH:img.naturalHeight,
+              box, reason:window.__segReason||"?",
+              trail:window.__segTrail||[]});
+    while(log.length>50) log.shift();
+    localStorage.setItem("faillog",JSON.stringify(log));
+  }catch(e){}
+  updateFailUI();
+}
+function updateFailUI(){
+  const n=JSON.parse(localStorage.getItem("faillog")||"[]").length;
+  $("faillog-row").classList.toggle("hidden", n===0);
+  $("faillog-count").textContent=n;
+}
+$("faillog-copy").onclick=async()=>{
+  const txt=localStorage.getItem("faillog")||"[]";
+  try{ await navigator.clipboard.writeText(txt); alert("Failure log copied — paste it to Claude."); }
+  catch(e){ prompt("Copy the log below:", txt); }
+};
+$("faillog-clear").onclick=()=>{ localStorage.removeItem("faillog"); updateFailUI(); };
 
 // ---------- manual: trace the lesion border ----------
 let lmpts=[];

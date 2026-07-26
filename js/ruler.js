@@ -37,8 +37,10 @@ function paperness(rgb) {                  // -> 8U mask input (normalized score
   cv.cvtColor(rgb, lab, cv.COLOR_RGB2Lab);
   cv.split(lab, chans);
   const a = new cv.Mat(), b = new cv.Mat();
-  chans.get(1).convertTo(a, cv.CV_32F);
-  chans.get(2).convertTo(b, cv.CV_32F);
+  const ca = chans.get(1), cb = chans.get(2);   // wrappers freed below
+  ca.convertTo(a, cv.CV_32F);
+  cb.convertTo(b, cv.CV_32F);
+  ca.delete(); cb.delete();
   // score = -(a-128) - (b-128) = 256 - a - b
   const score = new cv.Mat();
   cv.add(a, b, score);                     // a + b
@@ -114,7 +116,7 @@ function firstColorfulRow(warpedRGB) {
   const hsv = new cv.Mat(), chans = new cv.MatVector();
   cv.cvtColor(warpedRGB, hsv, cv.COLOR_RGB2HSV);
   cv.split(hsv, chans);
-  const sat = chans.get(1), colorful = new cv.Mat();
+  const sat = chans.get(1), colorful = new cv.Mat();  // sat freed below
   cv.threshold(sat, colorful, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
   const rowAvg = new cv.Mat();
   cv.reduce(colorful, rowAvg, 1, cv.REDUCE_AVG, cv.CV_32F);  // h x 1, 0..255
@@ -135,16 +137,19 @@ function firstColorfulRow(warpedRGB) {
 function tickRowComponents(warpedRGB) {
   const { y1, h } = firstColorfulRow(warpedRGB);
   if (y1 < 0.02 * h) return [];
-  const band = warpedRGB.roi(new cv.Rect(0, 0, warpedRGB.cols, y1)).clone();
+  const bTmp = warpedRGB.roi(new cv.Rect(0, 0, warpedRGB.cols, y1));
+  const band = bTmp.clone(); bTmp.delete();
   const hsv = new cv.Mat(), hch = new cv.MatVector();
   cv.cvtColor(band, hsv, cv.COLOR_RGB2HSV); cv.split(hsv, hch);
-  const v = hch.get(2), dark = new cv.Mat();
+  const v = hch.get(2), dark = new cv.Mat();          // v freed below
   cv.adaptiveThreshold(v, dark, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C,
                        cv.THRESH_BINARY_INV, 63, 25);
   const lab = new cv.Mat(), lch = new cv.MatVector();
   cv.cvtColor(band, lab, cv.COLOR_RGB2Lab); cv.split(lab, lch);
   const neutral = new cv.Mat();
-  cv.threshold(lch.get(1), neutral, 132, 255, cv.THRESH_BINARY_INV); // a < 133
+  const aCh = lch.get(1);
+  cv.threshold(aCh, neutral, 132, 255, cv.THRESH_BINARY_INV); // a < 133
+  aCh.delete();
   const black = new cv.Mat();
   cv.bitwise_and(dark, neutral, black);
   const labels = new cv.Mat(), stats = new cv.Mat(), cent = new cv.Mat();
@@ -191,7 +196,8 @@ function applyPersp(M, x, y) {
 function detectRuler(src, roi, opts) {
   opts = Object.assign({ minAreaFrac: 0.05, maxAreaFrac: 0.98, closeKsize: 25 }, opts || {});
   const rect = new cv.Rect(roi.x, roi.y, roi.w, roi.h);
-  const crop = src.roi(rect).clone();
+  const cTmp = src.roi(rect);                   // roi() wrapper must be freed
+  const crop = cTmp.clone(); cTmp.delete();
   const rgb = new cv.Mat(); cv.cvtColor(crop, rgb, cv.COLOR_RGBA2RGB);
   const den = new cv.Mat(); cv.bilateralFilter(rgb, den, 9, 75, 75, cv.BORDER_DEFAULT);
   const paper = paperness(den);

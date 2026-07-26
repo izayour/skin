@@ -140,7 +140,8 @@ function localOtsuRefine(darkness, blobPts) {
   const x0 = Math.max(minX - pad, 0), y0 = Math.max(minY - pad, 0);
   const x1 = Math.min(maxX + pad, darkness.cols), y1 = Math.min(maxY + pad, darkness.rows);
   const rect = new cv.Rect(x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0));
-  const window = darkness.roi(rect).clone();
+  const wtmp = darkness.roi(rect);              // roi() wrapper must be freed
+  const window = wtmp.clone(); wtmp.delete();
   const th = new cv.Mat();
   cv.threshold(window, th, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
   const cleaned = cleanMask(th);
@@ -180,14 +181,20 @@ function smoothPolygon(pts, rows, cols) {
 //   { result, seedPtsFull }  — result null on failure/leak; seedPtsFull is the
 //   picked seed blob in full-image coords (for retry/salvage), or null.
 function segmentOnce(src, roi, bgKsize, opts, excludeSpanning) {
+  const trailEntry = { roi: [roi.x, roi.y, roi.w, roi.h], bg: bgKsize,
+                       exclSpan: !!excludeSpanning };
+  if (window.__segTrail) window.__segTrail.push(trailEntry);
   const rect = new cv.Rect(roi.x, roi.y, roi.w, roi.h);
-  const work = src.roi(rect).clone();
+  const wrTmp = src.roi(rect);                  // roi() wrapper must be freed
+  const work = wrTmp.clone(); wrTmp.delete();
   const rgb = new cv.Mat(), lab = new cv.Mat(), chans = new cv.MatVector();
   cv.cvtColor(work, rgb, cv.COLOR_RGBA2RGB);
   cv.cvtColor(rgb, lab, cv.COLOR_RGB2Lab);
   cv.split(lab, chans);
+  const L = chans.get(0);                  // wrapper must be freed explicitly
   const gray = new cv.Mat();
-  cv.GaussianBlur(chans.get(0), gray, new cv.Size(opts.blur, opts.blur), 0);
+  cv.GaussianBlur(L, gray, new cv.Size(opts.blur, opts.blur), 0);
+  L.delete();
 
   const darkness = localDarkness(gray, bgKsize);
   const im = initialMask(darkness);
@@ -225,12 +232,17 @@ function segmentOnce(src, roi, bgKsize, opts, excludeSpanning) {
           // let the cascade look for something better
           window.__segReason = "found only a tiny speck";
         } else { window.__segReason = "ok"; result = r; }
+        trailEntry.area = Math.round(r.areaPx);
+        trailEntry.compact = +compact.toFixed(2);
+        trailEntry.spans = spans;
       }
     }
     refined.delete();
   } else {
     window.__segReason = "no dark blob found in the box";
   }
+  trailEntry.outcome = window.__segReason;
+  if (seedPtsFull) trailEntry.seedBBox = resultFromPts(seedPtsFull).bbox;
 
   work.delete(); rgb.delete(); lab.delete(); chans.delete();
   gray.delete(); darkness.delete(); seed.delete();
@@ -247,6 +259,8 @@ function segmentOnce(src, roi, bgKsize, opts, excludeSpanning) {
 function segmentLesion(src, roi, bgKsize, opts) {
   opts = Object.assign({ blur: 5, minAreaFrac: 0.002, maxAreaFrac: 0.95,
                          compactnessWeight: 0.35, centerWeight: 0.25 }, opts || {});
+  window.__segTrail = [];                  // per-attempt diagnostic record
+
   // Retry/salvage results must be a meaningful fraction of the box the user
   // drew around the lesion — otherwise a stray dark speck (hair, pore) far
   // smaller than any plausible lesion gets reported.
@@ -282,6 +296,9 @@ function segmentLesion(src, roi, bgKsize, opts) {
     // attempt 3: salvage — the seed blob's own outline, smoothed
     const r = resultFromPts(bestSeed);
     const spans = r.bbox[2] >= 0.95 * roi.w || r.bbox[3] >= 0.95 * roi.h;
+    window.__segTrail.push({ step: "salvage", seedArea: Math.round(r.areaPx),
+                             seedBBox: r.bbox, spans,
+                             minArea: Math.round(minSalvageArea) });
     if (!spans && r.areaPx >= minSalvageArea) {
       const local = bestSeed.map(([x, y]) => [x - roi.x, y - roi.y]);
       const sm = smoothPolygon(local, roi.h, roi.w);
