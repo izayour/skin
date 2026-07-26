@@ -185,8 +185,14 @@ function segmentLesion(src, roi, bgKsize, opts) {
           mnx = Math.min(mnx, x); mny = Math.min(mny, y);
           mxx = Math.max(mxx, x); mxy = Math.max(mxy, y);
         }
-        result = { points: pts, areaPx: area, centroid: [cx, cy],
-                   bbox: [mnx, mny, mxx - mnx, mxy - mny] };
+        // Leak guard: a real lesion is contained within the drawn box, so if
+        // the final blob spans nearly the whole box it has bled into skin /
+        // ruler / shadow — reject it (caller asks for a tighter box) rather
+        // than report a grossly inflated size.
+        const spans = (mxx - mnx) >= 0.95 * roi.w || (mxy - mny) >= 0.95 * roi.h;
+        if (!spans)
+          result = { points: pts, areaPx: area, centroid: [cx, cy],
+                     bbox: [mnx, mny, mxx - mnx, mxy - mny] };
       }
       filled.delete(); smooth.delete();
     }
