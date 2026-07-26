@@ -33,8 +33,12 @@
 
   <section id="stage-capture" class="card hidden">
     <p class="hint">Take or choose a photo of the lesion, with a ruler sticker in frame.</p>
+    <!-- two inputs: `capture` forces the camera, so gallery access needs an
+         input without it -->
     <input id="file" type="file" accept="image/*" capture="environment" class="hidden">
-    <button onclick="document.getElementById('file').click()">Take / choose photo</button>
+    <input id="filepick" type="file" accept="image/*" class="hidden">
+    <button onclick="document.getElementById('file').click()">Take a photo</button>
+    <button class="secondary" onclick="document.getElementById('filepick').click()">Choose from gallery</button>
     <button class="secondary" id="demo">Try the demo photo</button>
     <p class="disclaimer">Not a medical device. For demonstration only — does not diagnose.</p>
     <div id="faillog-row" class="hidden" style="margin-top:10px">
@@ -100,8 +104,8 @@
   </section>
 </main>
 
-<script src="js/pipeline.js?v=14"></script>
-<script src="js/ruler.js?v=14"></script>
+<script src="js/pipeline.js?v=15"></script>
+<script src="js/ruler.js?v=15"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
@@ -116,7 +120,9 @@ function drawImgTo(c){c.width=img.naturalWidth;c.height=img.naturalHeight;c.getC
 const LW=c=>Math.max(3,c.width/300), DOT=c=>Math.max(4,c.width/250);
 
 // ---------- load photo ----------
-$("file").addEventListener("change",e=>{if(e.target.files[0]){imgName=e.target.files[0].name;loadFrom(URL.createObjectURL(e.target.files[0]));}});
+const onPicked=e=>{if(e.target.files[0]){imgName=e.target.files[0].name;loadFrom(URL.createObjectURL(e.target.files[0]));}};
+$("file").addEventListener("change",onPicked);
+$("filepick").addEventListener("change",onPicked);
 $("demo").onclick=()=>{imgName="demo:half.jpg";loadFrom("half.jpg");};
 function loadFrom(src){img=new Image();img.onload=()=>{lbox=null;drawImgTo($("canvas"));$("detect").disabled=true;show("stage-box");};img.src=src;}
 
@@ -127,7 +133,7 @@ function redrawL(){const c=$("canvas"),g=c.getContext("2d");g.drawImage(img,0,0)
 $("canvas").addEventListener("pointerdown",ev=>{const[x,y]=pos($("canvas"),ev);lbox=[x,y,x,y];ldrag=true;ev.preventDefault();});
 $("canvas").addEventListener("pointermove",ev=>{if(!ldrag)return;const[x,y]=pos($("canvas"),ev);lbox[2]=x;lbox[3]=y;redrawL();ev.preventDefault();});
 $("canvas").addEventListener("pointerup",()=>{ldrag=false;if(lbox&&Math.abs(lbox[2]-lbox[0])>10&&Math.abs(lbox[3]-lbox[1])>10)$("detect").disabled=false;});
-$("rebox").onclick=()=>{$("file").value="";show("stage-capture");};
+$("rebox").onclick=()=>{$("file").value="";$("filepick").value="";show("stage-capture");};
 $("detect").onclick=()=>defer(()=>{
   const x=Math.round(Math.min(lbox[0],lbox[2])),y=Math.round(Math.min(lbox[1],lbox[3]));
   const w=Math.round(Math.abs(lbox[2]-lbox[0])),h=Math.round(Math.abs(lbox[3]-lbox[1]));
@@ -241,7 +247,7 @@ $("ticks-done").onclick=()=>{const d=Math.hypot(tpts[1][0]-tpts[0][0],tpts[1][1]
 
 // ---------- blurry ----------
 function showBlurry(){$("blurry-msg").textContent="Photo is too blurry to detect the ruler — retake in focus.";show("stage-blurry");}
-$("blurry-retake").onclick=()=>{$("file").value="";show("stage-capture");};
+$("blurry-retake").onclick=()=>{$("file").value="";$("filepick").value="";show("stage-capture");};
 $("blurry-tap").onclick=()=>startTicks();
 
 // ---------- finalize (draw everything + mm) ----------
@@ -265,7 +271,7 @@ function finalize(p){
 }
 function tickCenter(t){const xs=t.corners.map(p=>p[0]),ys=t.corners.map(p=>p[1]);
   return [xs.reduce((s,v)=>s+v,0)/xs.length, ys.reduce((s,v)=>s+v,0)/ys.length];}
-$("restart").onclick=()=>{$("file").value="";show("stage-capture");};
+$("restart").onclick=()=>{$("file").value="";$("filepick").value="";show("stage-capture");};
 </script>
 <script async src="vendor/opencv.js" onload="if(cv.getBuildInformation){onOpenCvReady()}else{cv['onRuntimeInitialized']=onOpenCvReady}"></script>
 </body>
