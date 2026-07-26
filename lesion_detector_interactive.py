@@ -240,6 +240,14 @@ class LesionDetector:
             if smoothed_contours:
                 contour = max(smoothed_contours, key=cv2.contourArea)
 
+        # Leak guard: a real lesion is contained within the drawn box, so if
+        # the final contour spans nearly the whole box it has bled into skin /
+        # ruler / shadow -- discard it rather than report an inflated size.
+        if contour is not None:
+            _, _, cw, ch = cv2.boundingRect(contour)
+            if cw >= 0.95 * bw or ch >= 0.95 * bh:
+                contour = None
+
         if contour is None or cv2.countNonZero(final_mask) == 0:
             print("WARNING: local Otsu refinement produced an empty mask "
                   "inside the ROI; no lesion boundary found.")
