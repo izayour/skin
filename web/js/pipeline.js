@@ -164,8 +164,10 @@ function segmentLesion(src, roi, bgKsize, opts) {
   im.delete();
 
   let result = null;
+  window.__segReason = "no dark blob found in the box";
   const blob = pickBlob(seed, opts);
   if (blob) {
+    window.__segReason = "refinement produced no contour";
     const refined = localOtsuRefine(darkness, blob);
     let cpts = largestContour(refined);
     if (cpts) {
@@ -190,9 +192,13 @@ function segmentLesion(src, roi, bgKsize, opts) {
         // ruler / shadow — reject it (caller asks for a tighter box) rather
         // than report a grossly inflated size.
         const spans = (mxx - mnx) >= 0.95 * roi.w || (mxy - mny) >= 0.95 * roi.h;
-        if (!spans)
+        if (spans) {
+          window.__segReason = "outline filled the whole box (leak) — draw a tighter box";
+        } else {
+          window.__segReason = "ok";
           result = { points: pts, areaPx: area, centroid: [cx, cy],
                      bbox: [mnx, mny, mxx - mnx, mxy - mny] };
+        }
       }
       filled.delete(); smooth.delete();
     }

@@ -95,8 +95,8 @@
   </section>
 </main>
 
-<script src="js/pipeline.js?v=4"></script>
-<script src="js/ruler.js?v=4"></script>
+<script src="js/pipeline.js?v=5"></script>
+<script src="js/ruler.js?v=5"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
@@ -129,7 +129,7 @@ $("detect").onclick=()=>defer(()=>{
   const bg=Math.max(31,Math.floor(Math.min(w,h)*0.9))|1;
   let res=null; try{res=segmentLesion(src,{x,y,w,h},bg);}catch(e){$("status").textContent="err "+e;}
   src.delete();
-  if(!res){alert("Couldn't detect the lesion — draw a tighter box, or tap 'Trace the border myself'.");show("stage-box");return;}
+  if(!res){alert("Couldn't detect the lesion ("+(window.__segReason||"?")+")\nbox="+JSON.stringify([x,y,w,h])+"\nDraw a tighter box, or tap 'Trace the border myself'.");show("stage-box");return;}
   lesion=res; showReview();
 });
 
