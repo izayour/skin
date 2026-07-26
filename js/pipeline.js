@@ -80,18 +80,23 @@ function smoothMask(mask) {                // round jagged staircase edges
   return out;
 }
 
-// pick the most lesion-like blob: weighted size + compactness + centrality.
+// rank the candidate blobs most-lesion-like first: weighted size +
+// compactness + centrality. Returns up to topN candidates rather than one, so
+// the caller can refine each and compare the *finished* outlines — picking a
+// single seed here commits the whole pipeline to a guess made on the coarse
+// mask, which is how a big soft shading region (areola, shadow) can beat the
+// small, obvious mole sitting right next to it.
 // excludeSpanning skips blobs spanning nearly the whole box — used on retry
 // after a leak (a box-spanning pick is usually skin/ruler/shadow), but not by
 // default: a legitimate coarse seed can span the box and still refine down to
 // the lesion correctly.
-function pickBlob(mask, opts, excludeSpanning) {
+function rankBlobs(mask, opts, excludeSpanning, topN) {
   const h = mask.rows, w = mask.cols, imgArea = h * w;
   const cx0 = w / 2, cy0 = h / 2, diag = Math.hypot(cx0, cy0);
   const minArea = Math.max(80, opts.minAreaFrac * imgArea);
   const contours = new cv.MatVector(), hier = new cv.Mat();
   cv.findContours(mask, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-  let best = null, bestScore = -1;
+  const cands = [];
   for (let i = 0; i < contours.size(); i++) {
     const c = contours.get(i);
     const area = cv.contourArea(c), frac = area / imgArea;
@@ -107,13 +112,14 @@ function pickBlob(mask, opts, excludeSpanning) {
         const score = (1 - opts.compactnessWeight - opts.centerWeight) * frac
                     + opts.compactnessWeight * compactness
                     + opts.centerWeight * centrality;
-        if (score > bestScore) { bestScore = score; best = cntPoints(c); }
+        cands.push({ pts: cntPoints(c), seedScore: score });
       }
     }
     c.delete();
   }
   contours.delete(); hier.delete();
-  return best;                             // [[x,y],...] in ROI coords, or null
+  cands.sort((a, b) => b.seedScore - a.seedScore);
+  return cands.slice(0, topN);             // ROI coords, best-seed-first
 }
 
 function largestContour(mask) {            // -> points (ROI coords) or null
@@ -150,6 +156,78 @@ function localOtsuRefine(darkness, blobPts) {
   cleaned.copyTo(dstRoi);
   window.delete(); th.delete(); cleaned.delete(); dstRoi.delete();
   return refined;
+}
+
+// How lesion-like is a finished outline? Compares it against the *skin right
+// around it* rather than against the box as a whole: a mole is markedly darker
+// than the ring of skin surrounding it, whereas a shading gradient (areola,
+// breast curve, shadow) fades into its surroundings and scores near zero no
+// matter how large or dark it looks in absolute terms. Size is deliberately a
+// weak term — it is exactly the size preference that let a big soft region
+// out-vote the real lesion. Returns 0..1-ish; higher is more lesion-like.
+function lesionScore(darkness, ptsLocal, rows, cols, areaPx, compactness) {
+  const fill = cv.Mat.zeros(rows, cols, cv.CV_8UC1);
+  fillPoly(fill, ptsLocal, 255);
+  let mnx = 1e9, mny = 1e9, mxx = -1e9, mxy = -1e9;
+  for (const [x, y] of ptsLocal) {
+    mnx = Math.min(mnx, x); mny = Math.min(mny, y);
+    mxx = Math.max(mxx, x); mxy = Math.max(mxy, y);
+  }
+  // ring thickness ~25% of the blob, so the comparison band is nearby skin
+  const k = Math.min(61, Math.max(9, Math.round(Math.min(mxx - mnx, mxy - mny) * 0.25))) | 1;
+  const kern = ellipseKernel(k), dil = new cv.Mat(), ring = new cv.Mat();
+  cv.dilate(fill, dil, kern);
+  cv.subtract(dil, fill, ring);
+  const inside = cv.mean(darkness, fill)[0];
+  const around = cv.countNonZero(ring) > 0 ? cv.mean(darkness, ring)[0] : inside;
+  fill.delete(); kern.delete(); dil.delete(); ring.delete();
+
+  const contrast = Math.max(0, (inside - around) / 255);   // 0..1
+  const frac = areaPx / (rows * cols);
+  // plateaus once the blob is a plausible lesion; only punishes specks
+  const sizeTerm = Math.min(1, frac / 0.02);
+  const score = 0.55 * Math.min(1, contrast / 0.25)
+              + 0.30 * compactness
+              + 0.15 * sizeTerm;
+  return { score, contrast, inside, around };
+}
+
+// A refined mask often carries a lobe of plain background skin hanging off the
+// lesion, joined to it by a thin neck (local Otsu inside a big window keeps
+// whatever else crossed its threshold, and one contour swallows both — the
+// straight edges of such a lobe are the box border showing through). Sever
+// necks with an opening, then keep the piece that is genuinely darker than the
+// skin around it: the background lobe has near-zero ring contrast, the lesion
+// has a lot. Opening erodes then dilates, so the surviving lesion keeps its
+// size and boundary — only protrusions thinner than the kernel are dropped.
+function bestComponent(refined, darkness) {
+  const all = largestContour(refined);
+  if (!all) return null;
+  let mnx = 1e9, mny = 1e9, mxx = -1e9, mxy = -1e9;
+  for (const [x, y] of all) {
+    mnx = Math.min(mnx, x); mny = Math.min(mny, y);
+    mxx = Math.max(mxx, x); mxy = Math.max(mxy, y);
+  }
+  const k = Math.min(41, Math.max(9,
+    Math.round(Math.min(mxx - mnx, mxy - mny) * 0.15))) | 1;
+  const kern = ellipseKernel(k), opened = new cv.Mat();
+  cv.morphologyEx(refined, opened, cv.MORPH_OPEN, kern, new cv.Point(-1, -1), 1);
+  const contours = new cv.MatVector(), hier = new cv.Mat();
+  cv.findContours(opened, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  let best = null, bestScore = -1;
+  for (let i = 0; i < contours.size(); i++) {
+    const c = contours.get(i), a = cv.contourArea(c);
+    if (a >= 80) {
+      const pts = cntPoints(c);
+      const perim = cv.arcLength(c, true) + 1e-6;
+      const comp = 4 * Math.PI * a / (perim * perim);
+      const ls = lesionScore(darkness, pts, refined.rows, refined.cols, a, comp);
+      if (ls.score > bestScore) { bestScore = ls.score; best = pts; }
+    }
+    c.delete();
+  }
+  contours.delete(); hier.delete(); kern.delete(); opened.delete();
+  return best || all;         // opening wiped it out (tiny lesion) -> keep as-is
 }
 
 // build the result record from full-image contour points
@@ -202,42 +280,64 @@ function segmentOnce(src, roi, bgKsize, opts, excludeSpanning) {
   im.delete();
 
   let result = null, seedPtsFull = null;
-  const blob = pickBlob(seed, opts, excludeSpanning);
-  if (blob) {
-    seedPtsFull = blob.map(([x, y]) => [x + roi.x, y + roi.y]);
+  // Refine EVERY plausible candidate and compare the finished outlines --
+  // never return the first one that merely passes the sanity checks.
+  const cands = rankBlobs(seed, opts, excludeSpanning, opts.maxCandidates);
+  trailEntry.cands = [];
+  if (cands.length) {
+    seedPtsFull = cands[0].pts.map(([x, y]) => [x + roi.x, y + roi.y]);
     window.__segReason = "refinement produced no contour";
-    const refined = localOtsuRefine(darkness, blob);
-    const cpts = largestContour(refined);
-    if (cpts) {
-      const finalPts = smoothPolygon(cpts, refined.rows, refined.cols);
-      if (finalPts) {
-        const pts = finalPts.map(([x, y]) => [x + roi.x, y + roi.y]);
-        const r = resultFromPts(pts);
-        // Leak test: filling the box alone isn't a leak — a snugly drawn box
-        // SHOULD be filled by the lesion. A leak is box-spanning AND
-        // sprawling (an arc/smear has low compactness; a lesion is compact).
-        const spans = r.bbox[2] >= 0.95 * roi.w || r.bbox[3] >= 0.95 * roi.h;
-        let per = 0;
-        for (let i = 0; i < pts.length; i++) {
-          const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length];
-          per += Math.hypot(x2 - x1, y2 - y1);
-        }
-        const compact = 4 * Math.PI * r.areaPx / (per * per + 1e-6);
-        // real leaks are sprawling arcs/smears (compactness ~0.2); hairy but
-        // genuine lesions stay above ~0.3 even with ragged edges
-        if (spans && compact < 0.3) {
-          window.__segReason = "outline filled the box (leak)";
-        } else if (r.areaPx < 0.005 * roi.w * roi.h) {
-          // a speck far smaller than any plausible lesion for this box —
-          // let the cascade look for something better
-          window.__segReason = "found only a tiny speck";
-        } else { window.__segReason = "ok"; result = r; }
+    let bestScore = -1, bestSeed = null;
+    for (const cand of cands) {
+      const refined = localOtsuRefine(darkness, cand.pts);
+      const cpts = bestComponent(refined, darkness);
+      const finalPts = cpts ? smoothPolygon(cpts, refined.rows, refined.cols) : null;
+      if (!finalPts) { refined.delete(); continue; }
+      const pts = finalPts.map(([x, y]) => [x + roi.x, y + roi.y]);
+      const r = resultFromPts(pts);
+      // Leak test: filling the box alone isn't a leak — a snugly drawn box
+      // SHOULD be filled by the lesion. A leak is box-spanning AND
+      // sprawling (an arc/smear has low compactness; a lesion is compact).
+      const spans = r.bbox[2] >= 0.95 * roi.w || r.bbox[3] >= 0.95 * roi.h;
+      let per = 0;
+      for (let i = 0; i < pts.length; i++) {
+        const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length];
+        per += Math.hypot(x2 - x1, y2 - y1);
+      }
+      const compact = 4 * Math.PI * r.areaPx / (per * per + 1e-6);
+      const ls = lesionScore(darkness, finalPts, refined.rows, refined.cols,
+                             r.areaPx, compact);
+      refined.delete();
+
+      let why;
+      // real leaks are sprawling arcs/smears (compactness ~0.2); hairy but
+      // genuine lesions stay above ~0.3 even with ragged edges
+      if (spans && compact < 0.3) why = "outline filled the box (leak)";
+      // a speck far smaller than any plausible lesion for this box. The bar is
+      // low because a deliberately wide box makes a real lesion a small
+      // fraction of it -- the contrast score, not size, sorts them out now.
+      else if (r.areaPx < Math.max(200, 0.0015 * roi.w * roi.h))
+        why = "found only a tiny speck";
+      else why = "ok";
+      trailEntry.cands.push({ area: Math.round(r.areaPx),
+                              compact: +compact.toFixed(2), spans,
+                              contrast: +ls.contrast.toFixed(3),
+                              score: +ls.score.toFixed(3), why });
+      if (why === "ok" && ls.score > bestScore) {
+        bestScore = ls.score; result = r; bestSeed = cand.pts;
         trailEntry.area = Math.round(r.areaPx);
         trailEntry.compact = +compact.toFixed(2);
         trailEntry.spans = spans;
+        trailEntry.score = +ls.score.toFixed(3);
+      } else if (result === null) {
+        window.__segReason = why;
       }
     }
-    refined.delete();
+    if (result) {
+      window.__segReason = trailEntry.cands.length > 1
+        ? `ok (best of ${trailEntry.cands.length} candidates)` : "ok";
+      seedPtsFull = bestSeed.map(([x, y]) => [x + roi.x, y + roi.y]);
+    }
   } else {
     window.__segReason = "no dark blob found in the box";
   }
@@ -258,7 +358,8 @@ function segmentOnce(src, roi, bgKsize, opts, excludeSpanning) {
 // returns {points:[[x,y]... full], areaPx, centroid, bbox} or null
 function segmentLesion(src, roi, bgKsize, opts) {
   opts = Object.assign({ blur: 5, minAreaFrac: 0.002, maxAreaFrac: 0.95,
-                         compactnessWeight: 0.35, centerWeight: 0.25 }, opts || {});
+                         compactnessWeight: 0.35, centerWeight: 0.25,
+                         maxCandidates: 6 }, opts || {});
   window.__segTrail = [];                  // per-attempt diagnostic record
 
   // Retry/salvage results must be a meaningful fraction of the box the user
