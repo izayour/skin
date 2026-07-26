@@ -206,10 +206,25 @@ function segmentOnce(src, roi, bgKsize, opts, excludeSpanning) {
       if (finalPts) {
         const pts = finalPts.map(([x, y]) => [x + roi.x, y + roi.y]);
         const r = resultFromPts(pts);
-        // a real lesion is contained in the box; a box-spanning outline leaked
+        // Leak test: filling the box alone isn't a leak — a snugly drawn box
+        // SHOULD be filled by the lesion. A leak is box-spanning AND
+        // sprawling (an arc/smear has low compactness; a lesion is compact).
         const spans = r.bbox[2] >= 0.95 * roi.w || r.bbox[3] >= 0.95 * roi.h;
-        if (spans) window.__segReason = "outline filled the box (leak)";
-        else { window.__segReason = "ok"; result = r; }
+        let per = 0;
+        for (let i = 0; i < pts.length; i++) {
+          const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length];
+          per += Math.hypot(x2 - x1, y2 - y1);
+        }
+        const compact = 4 * Math.PI * r.areaPx / (per * per + 1e-6);
+        // real leaks are sprawling arcs/smears (compactness ~0.2); hairy but
+        // genuine lesions stay above ~0.3 even with ragged edges
+        if (spans && compact < 0.3) {
+          window.__segReason = "outline filled the box (leak)";
+        } else if (r.areaPx < 0.005 * roi.w * roi.h) {
+          // a speck far smaller than any plausible lesion for this box —
+          // let the cascade look for something better
+          window.__segReason = "found only a tiny speck";
+        } else { window.__segReason = "ok"; result = r; }
       }
     }
     refined.delete();
@@ -232,6 +247,11 @@ function segmentOnce(src, roi, bgKsize, opts, excludeSpanning) {
 function segmentLesion(src, roi, bgKsize, opts) {
   opts = Object.assign({ blur: 5, minAreaFrac: 0.002, maxAreaFrac: 0.95,
                          compactnessWeight: 0.35, centerWeight: 0.25 }, opts || {});
+  // Retry/salvage results must be a meaningful fraction of the box the user
+  // drew around the lesion — otherwise a stray dark speck (hair, pore) far
+  // smaller than any plausible lesion gets reported.
+  const minSalvageArea = Math.max(80, 0.01 * roi.w * roi.h);
+
   // attempt 1: as drawn
   const a1 = segmentOnce(src, roi, bgKsize, opts, false);
   if (a1.result) return a1.result;
@@ -239,7 +259,9 @@ function segmentLesion(src, roi, bgKsize, opts) {
   // attempt 1b: the picked blob led to a leak/failure — retry ignoring
   // box-spanning blobs so a compact lesion blob can win instead
   const a1b = segmentOnce(src, roi, bgKsize, opts, true);
-  if (a1b.result) { window.__segReason = "ok (ignored box-spanning blob)"; return a1b.result; }
+  if (a1b.result && a1b.result.areaPx >= minSalvageArea) {
+    window.__segReason = "ok (ignored box-spanning blob)"; return a1b.result;
+  }
 
   let bestSeed = a1b.seedPtsFull || a1.seedPtsFull;
   if (bestSeed) {
@@ -252,13 +274,15 @@ function segmentLesion(src, roi, bgKsize, opts) {
     if (nw > 20 && nh > 20 && (nw < roi.w * 0.95 || nh < roi.h * 0.95)) {
       const bg2 = Math.max(31, Math.floor(Math.min(nw, nh) * 0.9)) | 1;
       const a2 = segmentOnce(src, { x: nx, y: ny, w: nw, h: nh }, bg2, opts, false);
-      if (a2.result) { window.__segReason = "ok (auto-tightened box)"; return a2.result; }
+      if (a2.result && a2.result.areaPx >= minSalvageArea) {
+        window.__segReason = "ok (auto-tightened box)"; return a2.result;
+      }
       if (a2.seedPtsFull) bestSeed = a2.seedPtsFull;
     }
     // attempt 3: salvage — the seed blob's own outline, smoothed
     const r = resultFromPts(bestSeed);
     const spans = r.bbox[2] >= 0.95 * roi.w || r.bbox[3] >= 0.95 * roi.h;
-    if (!spans && r.areaPx >= 80) {
+    if (!spans && r.areaPx >= minSalvageArea) {
       const local = bestSeed.map(([x, y]) => [x - roi.x, y - roi.y]);
       const sm = smoothPolygon(local, roi.h, roi.w);
       window.__segReason = "ok (salvaged seed outline)";
