@@ -187,9 +187,9 @@
   </section>
 </main>
 
-<script src="js/pipeline.js?v=37"></script>
-<script src="js/ruler.js?v=37"></script>
-<script src="js/genruler.js?v=37"></script>
+<script src="js/pipeline.js?v=40"></script>
+<script src="js/ruler.js?v=40"></script>
+<script src="js/genruler.js?v=40"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
@@ -606,20 +606,30 @@ function finalize(p){
   // show which axis was measured, so the number is checkable against the photo
   g.strokeStyle="#ffd54f";g.lineWidth=LW(c);
   g.beginPath();g.moveTo(wide.a[0],wide.a[1]);g.lineTo(wide.b[0],wide.b[1]);g.stroke();
-  // label lesion with real size
-  g.fillStyle="#00e676";g.font=`bold ${Math.max(20,c.width/45)}px system-ui`;
-  g.fillText(`${areaMm2.toFixed(1)} mm2  (D ${dia.toFixed(1)} mm)`,lesion.bbox[0],Math.max(30,lesion.bbox[1]-12));
+  // Label centred over the lesion, on two lines. Centring keeps it inside the
+  // comparison crop (which is centred on the lesion), and two short lines fit
+  // where one long one ran past the crop edge and got cut.
+  const fs=Math.max(20,c.width/45);
+  g.fillStyle="#00e676";g.font=`bold ${fs}px system-ui`;
+  g.textAlign="center";
+  const labelX=lesion.centroid[0];
+  const labelBase=Math.max(fs*2.4,lesion.bbox[1]-fs*0.5);
+  g.fillText(`${areaMm2.toFixed(1)} mm²`,labelX,labelBase-fs*1.15);
+  g.fillText(`D ${dia.toFixed(1)} mm`,labelX,labelBase);
+  g.textAlign="left";
   // draw the two cm-tick markers + 1 cm segment
   const m = p.markers || [ tickCenter(p.a), tickCenter(p.b) ];
   g.fillStyle="#00e5ff";g.strokeStyle="#00e5ff";g.lineWidth=LW(c);
   m.forEach(pt=>{g.beginPath();g.arc(pt[0],pt[1],DOT(c),0,7);g.fill();});
   g.beginPath();g.moveTo(m[0][0],m[0][1]);g.lineTo(m[1][0],m[1][1]);g.stroke();
   g.fillText(p.spanLabel||"1 cm",Math.min(m[0][0],m[1][0]),Math.min(m[0][1],m[1][1])-14);
+  // crop last, so the centred label is part of the comparison image
+  const crop=lesionCrop(p.pxPerCm,dia);
   $("final-method").textContent="Result — ruler-calibrated";
   $("fstats").innerHTML=`Diameter (widest): <b>${dia.toFixed(1)} mm</b><br>Area: <b>${areaMm2.toFixed(1)} mm²</b><br>`+
     `Equivalent circle: ${equivDia.toFixed(1)} mm<br>`+
     `Scale: ${p.pxPerCm.toFixed(0)} px/cm<br>Lesion area: ${Math.round(lesion.areaPx).toLocaleString()} px`;
-  const saved=storeResult(areaMm2,dia,p.pxPerCm);
+  const saved=storeResult(areaMm2,dia,p.pxPerCm,crop);
   $("fstats").innerHTML+=saved
     ? `<br><span class="steady">Saved for comparison.</span>`
     : `<br><span class="grew">Couldn't save (storage full).</span>`;
@@ -658,13 +668,12 @@ function writeResults(list){
     catch(e){ if(l.length<=1) return false; l=l.slice(1); }
   }
 }
-function storeResult(areaMm2,dia,pxPerCm){
+function storeResult(areaMm2,dia,pxPerCm,crop){
   const c=$("fcanvas");
   const s=Math.min(1,THUMB_MAX/Math.max(c.width,c.height));
   const t=document.createElement("canvas");
   t.width=Math.round(c.width*s); t.height=Math.round(c.height*s);
   t.getContext("2d").drawImage(c,0,0,t.width,t.height);
-  const crop=lesionCrop(pxPerCm,dia);
   const list=loadResults();
   list.push({ id:Date.now(), t:new Date().toISOString(), name:imgName,
               areaMm2:+areaMm2.toFixed(1), diaMm:+dia.toFixed(1),
@@ -728,7 +737,9 @@ $("gal-go").onclick=()=>{
   const [a,b]=pair;
   $("cmp-imgs").innerHTML=pair.map((r,i)=>
     `<div><img src="${r.crop||r.img}" alt=""><div class="cap"><b>${i?"Later":"Earlier"}</b><br>
-     ${fmtDate(r.t)}<br>${r.diaMm} mm · ${r.areaMm2} mm²</div></div>`).join("");
+     ${fmtDate(r.t)}<br>${r.diaMm} mm · ${r.areaMm2} mm²${
+       r.crop?"":'<br><span class="grew">whole photo</span>'}</div></div>`).join("");
+  const legacy=pair.filter(r=>!r.crop).length;
   const days=Math.round((new Date(b.t)-new Date(a.t))/86400000);
   const dDia=b.diaMm-a.diaMm, dArea=b.areaMm2-a.areaMm2;
   const pctDia=a.diaMm? dDia/a.diaMm*100 : 0;
@@ -746,6 +757,12 @@ $("gal-go").onclick=()=>{
     `Scale used: ${a.pxPerCm} → ${b.pxPerCm} px/cm`+
     (Math.abs(pctDia)<10?`<br><span class="hint">Differences under 10% are within
       re-measurement error — treat as unchanged.</span>`:"")+
+    (legacy
+      ? `<br><span class="grew">${legacy===2?"Both measurements were":"One measurement was"}
+         saved by an older version and ${legacy===2?"are":"is"} shown as the whole photo, not a
+         zoomed crop — so the pictures are at different magnifications and can't be compared by
+         eye. Re-measure to get matched crops. The numbers below are still valid.</span>`
+      : "")+
     (a.cropMm&&b.cropMm&&a.cropMm!==b.cropMm
       ? `<br><span class="hint">The two crops cover ${a.cropMm} mm and ${b.cropMm} mm
          of skin, so they are not shown at the same magnification — compare the
