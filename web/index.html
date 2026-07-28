@@ -7,30 +7,54 @@
 <style>
   * { box-sizing: border-box; }
   body { margin:0; font-family:system-ui,sans-serif; background:#111; color:#eee; }
-  header { padding:14px 16px; background:#1b5e20; font-weight:600; font-size:18px; }
-  main { padding:16px; max-width:720px; margin:0 auto; }
-  .card { background:#1d1d1d; border-radius:12px; padding:16px; margin-bottom:16px; }
-  button { border:0; border-radius:10px; padding:14px 18px; font-size:16px; font-weight:600;
-           color:#fff; background:#2e7d32; width:100%; margin-top:10px; }
+  header { padding:8px 14px; background:#1b5e20; font-weight:600; font-size:16px; }
+  main { padding:8px; max-width:720px; margin:0 auto; }
+  .card { background:#1d1d1d; border-radius:12px; padding:10px; margin-bottom:8px; }
+  button { border:0; border-radius:10px; padding:12px 10px; font-size:15px; font-weight:600;
+           color:#fff; background:#2e7d32; width:100%; margin-top:8px; }
   button.secondary { background:#37474f; } button.danger { background:#c62828; }
   button:disabled { opacity:.4; }
-  .row { display:flex; gap:10px; } .row button { flex:1; }
-  canvas { width:100%; border-radius:10px; display:block; touch-action:none; }
-  .hint { font-size:14px; color:#9e9e9e; margin:6px 0 0; }
+  .row { display:flex; gap:8px; } .row button { flex:1; min-width:0; }
+  /* three across: shrink the label rather than wrapping onto another line */
+  .row.tight button { font-size:13px; padding:12px 4px; }
+  /* Bound the photo's height so the action buttons stay on screen without
+     scrolling -- a portrait 3:4 photo at width:100% is ~500px tall on a phone
+     and pushed them below the fold. width/height auto keeps the aspect ratio;
+     the backing store is untouched, so hit-testing math is unaffected. */
+  canvas { display:block; margin:0 auto; max-width:100%; max-height:46vh;
+           width:auto; height:auto; border-radius:10px; touch-action:none; }
+  .hint { font-size:12px; color:#9e9e9e; margin:4px 0 0; }
   /* the "what do I do now" line -- brighter than .hint because a user staring
      at a photo with no visible affordance needs telling, not a footnote */
-  .instruct { font-size:15px; font-weight:600; color:#ffd54f; margin:0 0 10px; }
-  .zoomrow { display:flex; gap:8px; margin-top:10px; align-items:center; }
-  .zoomrow button { flex:0 0 auto; width:52px; margin-top:0; padding:10px 0;
-                    font-size:20px; line-height:1; }
+  .instruct { font-size:14px; font-weight:600; color:#ffd54f; margin:0 0 6px; }
+  .zoomrow { display:flex; gap:8px; margin-top:8px; align-items:center; }
+  .zoomrow button { flex:0 0 auto; width:46px; margin-top:0; padding:8px 0;
+                    font-size:19px; line-height:1; }
   .zoomrow .zoomlvl { flex:1; text-align:center; font-size:13px; color:#9e9e9e; }
   .stats { font-size:14px; color:#bbb; margin-top:10px; line-height:1.6; }
   .badge { display:inline-block; padding:2px 10px; border-radius:999px; background:#333;
            font-size:13px; margin-bottom:8px; }
   #status { font-size:13px; color:#9e9e9e; }
-  .warn { color:#ffb74d; font-size:16px; }
+  .warn { color:#ffb74d; font-size:13px; line-height:1.5; margin:0 0 6px; }
   .hidden { display:none; }
   .disclaimer { font-size:12px; color:#777; margin-top:8px; }
+  .gallery { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;
+             max-height:52vh; overflow-y:auto; }
+  .gitem { border:2px solid #333; border-radius:8px; padding:4px; background:#262626; }
+  .gitem.sel { border-color:#00e676; }
+  .gitem img { width:100%; border-radius:6px; display:block; }
+  .gitem .meta { font-size:11px; color:#bbb; margin-top:4px; line-height:1.35; }
+  .gitem .pick { font-size:11px; color:#00e676; font-weight:700; }
+  .cmp { display:flex; gap:8px; }
+  .cmp > div { flex:1; min-width:0; }
+  .cmp img { width:100%; border-radius:8px; display:block; }
+  .cmp .cap { font-size:11px; color:#bbb; margin-top:4px; line-height:1.4; }
+  .delta { margin-top:10px; font-size:14px; line-height:1.7; }
+  .delta .big { font-size:19px; font-weight:700; display:block; margin-bottom:4px; }
+  .grew { color:#ff8a65; } .shrank { color:#4fc3f7; } .steady { color:#9e9e9e; }
+  .optline { display:flex; gap:8px; align-items:flex-start; margin-top:10px;
+             font-size:13px; color:#bbb; line-height:1.4; }
+  .optline input { width:20px; height:20px; flex:0 0 auto; margin:0; }
 </style>
 </head>
 <body>
@@ -47,6 +71,9 @@
     <button onclick="document.getElementById('file').click()">Take a photo</button>
     <button class="secondary" onclick="document.getElementById('filepick').click()">Choose from gallery</button>
     <button class="secondary" id="demo">Try the demo photo</button>
+    <button class="secondary hidden" id="compare-open">Compare over time (<span id="saved-count">0</span> saved)</button>
+    <label class="optline"><input type="checkbox" id="genruler-on">
+      General ruler — plain mm/cm markings, no colour strip</label>
     <p class="disclaimer">Not a medical device. For demonstration only — does not diagnose.<br>
       <span id="appver">Version …</span></p>
     <div id="faillog-row" class="hidden" style="margin-top:10px">
@@ -63,9 +90,9 @@
     <p class="instruct" id="box-instruct">Drag your finger across the photo to draw a box around the lesion.</p>
     <canvas id="canvas"></canvas>
     <p class="hint">The box just needs to contain the lesion — it doesn't have to be tight.</p>
-    <div class="row"><button id="detect" disabled>Detect lesion</button>
+    <div class="row tight"><button id="detect" disabled>Detect</button>
+      <button id="ltrace" class="secondary">Trace myself</button>
       <button id="rebox" class="secondary">New photo</button></div>
-    <button id="ltrace" class="secondary">Trace the border myself</button>
   </section>
 
   <section id="stage-lmanual" class="card hidden">
@@ -87,9 +114,9 @@
     <span class="badge">Lesion found — accept?</span>
     <p class="instruct">Does the green outline match the lesion?</p>
     <canvas id="rcanvas"></canvas>
-    <div class="row"><button id="accept">Accept &amp; measure</button>
-      <button id="reject" class="danger">Reject &amp; redraw box</button></div>
-    <button id="reject-trace" class="secondary">Reject &amp; trace the border myself</button>
+    <div class="row tight"><button id="accept">Accept</button>
+      <button id="reject-trace" class="secondary">Trace myself</button>
+      <button id="reject" class="danger">Redraw box</button></div>
   </section>
 
   <section id="stage-rulerbox" class="card hidden">
@@ -101,9 +128,17 @@
   </section>
 
   <section id="stage-ticks" class="card hidden">
-    <span class="badge">Tap the two 1 cm marks nearest the lesion</span>
+    <span class="badge">1 cm marks</span>
+    <p class="warn hidden" id="ticks-why"></p>
+    <p class="instruct" id="tick-instruct">Zoom in, then tap two marks exactly 1 cm apart.</p>
     <canvas id="tickcanvas"></canvas>
-    <p class="hint">Tap one cm mark, then the next (exactly 1 cm apart).</p>
+    <p class="hint">Pinch or +/− to zoom · drag to move · tap to place a mark.</p>
+    <div class="zoomrow">
+      <button class="secondary" id="tk-zoomout">−</button>
+      <span class="zoomlvl" id="tk-zoomlvl">1.0×</span>
+      <button class="secondary" id="tk-zoomin">+</button>
+      <button class="secondary" id="tk-zoomreset" style="width:auto;padding:8px 12px;font-size:13px">Fit</button>
+    </div>
     <div class="row"><button id="ticks-done" disabled>Use these</button>
       <button id="ticks-undo" class="secondary">Undo</button></div>
   </section>
@@ -115,6 +150,35 @@
     <button id="blurry-tap" class="secondary">Tap the ticks anyway</button>
   </section>
 
+  <section id="stage-genruler" class="card hidden">
+    <span class="badge">General ruler</span>
+    <p class="instruct" id="gen-instruct">Found evenly spaced marks — how far apart are they?</p>
+    <canvas id="gencanvas"></canvas>
+    <p class="hint" id="gen-detail"></p>
+    <div class="row tight"><button id="gen-mm">1 mm apart</button>
+      <button id="gen-cm" class="secondary">1 cm apart</button>
+      <button id="gen-manual" class="secondary">Tap ticks</button></div>
+  </section>
+
+  <section id="stage-gallery" class="card hidden">
+    <span class="badge">Compare over time</span>
+    <p class="instruct" id="gal-instruct">Pick two saved measurements to compare.</p>
+    <div class="gallery" id="gallery"></div>
+    <div class="row tight"><button id="gal-go" disabled>Compare</button>
+      <button id="gal-del" class="danger" disabled>Delete</button>
+      <button id="gal-back" class="secondary">Back</button></div>
+  </section>
+
+  <section id="stage-compare" class="card hidden">
+    <span class="badge">Change over time</span>
+    <div class="cmp" id="cmp-imgs"></div>
+    <div class="delta" id="cmp-delta"></div>
+    <p class="disclaimer">Sizes come from each photo's own ruler calibration, so
+      small differences may be measurement error rather than real change. Not a
+      diagnosis — discuss any change with a clinician.</p>
+    <button id="cmp-back" class="secondary">Back</button>
+  </section>
+
   <section id="stage-final" class="card hidden">
     <span class="badge" id="final-method">Result</span>
     <canvas id="fcanvas"></canvas>
@@ -123,8 +187,9 @@
   </section>
 </main>
 
-<script src="js/pipeline.js?v=19"></script>
-<script src="js/ruler.js?v=19"></script>
+<script src="js/pipeline.js?v=37"></script>
+<script src="js/ruler.js?v=37"></script>
+<script src="js/genruler.js?v=37"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
@@ -137,10 +202,14 @@ const APP_VERSION=(()=>{
   return m?m[1]:"?";
 })();
 $("appver").textContent="Version "+APP_VERSION;
-const STAGES=["stage-capture","stage-box","stage-lmanual","stage-review","stage-rulerbox","stage-ticks","stage-blurry","stage-final","spinner"];
+const STAGES=["stage-capture","stage-box","stage-lmanual","stage-review","stage-rulerbox","stage-ticks","stage-blurry","stage-final","stage-genruler","stage-gallery","stage-compare","spinner"];
 const show=id=>STAGES.forEach(s=>$(s).classList.toggle("hidden",s!==id));
 const defer=fn=>{show("spinner");setTimeout(fn,30);};   // let spinner paint before heavy work
-function onOpenCvReady(){cvReady=true;$("status").textContent="Ready — v"+APP_VERSION;show("stage-capture");updateFailUI();}
+// The status card sits above every stage, so once loading is done it is a
+// wasted row on a phone -- collapse it, and only bring it back for errors.
+// The version lives on the capture screen instead (see #appver).
+function setStatus(msg){const s=$("status");s.textContent=msg||"";s.classList.toggle("hidden",!msg);}
+function onOpenCvReady(){cvReady=true;setStatus("");show("stage-capture");updateFailUI();updateCompareUI();}
 let imgName="(none)";
 
 // screen -> image pixels. With a view, undo its scale/offset so callers keep
@@ -287,7 +356,7 @@ $("detect").onclick=()=>defer(()=>{
   const {x,y,w,h}=box;
   const bg=Math.max(31,Math.floor(Math.min(w,h)*0.9))|1;
   let res=null; try{res=segmentLesion(src,box,bg);}
-  catch(e){window.__segReason="error: "+cvErr(e);$("status").textContent="err "+cvErr(e);}
+  catch(e){window.__segReason="error: "+cvErr(e);setStatus("err "+cvErr(e));}
   src.delete();
   if(!res){
     logFailure([x,y,w,h]);
@@ -371,16 +440,71 @@ $("reject").onclick=()=>{drawImgTo($("canvas"));lbox=null;$("detect").disabled=t
 $("reject-trace").onclick=()=>{lesion=null;startLManual();};
 $("accept").onclick=()=>defer(()=>{
   const src=cleanSrc();
+  // "General ruler" takes a different route entirely -- see genruler.js
+  if($("genruler-on").checked){
+    const gr=nearLesionRoi(src.cols,src.rows,lesion.bbox);
+    const groi=clampRoi(gr.x,gr.y,gr.w,gr.h,src.cols,src.rows,32);
+    let g=null;
+    if(groi){ try{g=detectGenericRuler(src,groi);}catch(e){setStatus("err "+cvErr(e));} }
+    src.delete();
+    if(g){showGenRuler(g);return;}
+    const d=window.__genDiag;
+    startTicks("Automatic detection failed. "+
+      (d&&d.reason ? d.reason : "No evenly spaced ruler marks were found near the lesion.")+
+      " Tap two marks 1 cm apart instead.");
+    return;
+  }
   const raw=belowLesionRoi(src.cols,src.rows,lesion.bbox);
   const roi=clampRoi(raw.x,raw.y,raw.w,raw.h,src.cols,src.rows,32);
   let r=null;
-  if(roi){ try{r=detectRuler(src,roi);}catch(e){$("status").textContent="err "+cvErr(e);} }
+  if(roi){ try{r=detectRuler(src,roi);}catch(e){setStatus("err "+cvErr(e));} }
   src.delete();
   if(r){const p=twoCmTicksNear(r.cmTicks,lesion.centroid[0]);
     if(p){finalize(p);return;}
     if(r.sharpness<BLUR_THRESHOLD){showBlurry();return;}}
   startRulerBox();                       // auto failed -> ask for a ruler box
 });
+
+// ---------- general ruler: confirm what the detected spacing means ----------
+// The run of marks is solid evidence of a scale, but pixels cannot say whether
+// the spacing is 1 mm or 1 cm -- so show what was found and let the user say.
+let genFound=null;
+function showGenRuler(g){
+  genFound=g;
+  const c=$("gencanvas");drawImgTo(c);const ctx=c.getContext("2d");
+  ctx.strokeStyle="#ffd54f";ctx.fillStyle="#ffd54f";ctx.lineWidth=LW(c);
+  g.ticks.forEach(t=>{ctx.beginPath();ctx.arc(t[0],t[1],DOT(c),0,7);ctx.fill();});
+  const a=g.ticks[0],b=g.ticks[g.ticks.length-1];
+  ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+  ctx.strokeStyle="#00e676";
+  ctx.strokeRect(g.roi.x,g.roi.y,g.roi.w,g.roi.h);
+  const known=!g.unitUnknown&&g.marksPerCm;
+  $("gen-instruct").textContent = known
+    ? "Found the ruler and read its scale — check the marks look right."
+    : "Found evenly spaced marks — how far apart are they?";
+  $("gen-detail").textContent = known
+    ? `${g.count} marks, ${g.pxPerTick.toFixed(1)} px apart. Every ${g.marksPerCm}th mark is `
+      + `a long one, so ${g.marksPerCm} marks = 1 cm ⇒ ${g.pxPerCm.toFixed(0)} px/cm.`
+    : `${g.count} marks, ${g.pxPerTick.toFixed(1)} px apart (${g.count-1} gaps ⇒ `
+      + `${g.count-1} mm if millimetre marks, ${g.count-1} cm if centimetre marks).`;
+  // when the mark pattern settled the unit, one button confirms it
+  $("gen-mm").textContent = known ? "Use this scale" : "1 mm apart";
+  $("gen-cm").classList.toggle("hidden", !!known);
+  show("stage-genruler");
+}
+const genUse=mmPerTick=>{
+  // pxPerCm is what the rest of the app calibrates with. When the long/short
+  // pattern identified the unit, use that directly instead of a chosen one.
+  const pxPerCm = mmPerTick==null ? genFound.pxPerCm
+                                  : genFound.pxPerTick*(10/mmPerTick);
+  const a=genFound.ticks[0],b=genFound.ticks[genFound.ticks.length-1];
+  const spanCm=(genFound.count-1)*genFound.pxPerTick/pxPerCm;
+  finalize({pxPerCm,markers:[a,b],
+            spanLabel: spanCm>=1 ? `${spanCm.toFixed(1)} cm` : `${(spanCm*10).toFixed(0)} mm`});
+};
+$("gen-mm").onclick=()=>genUse(genFound&&!genFound.unitUnknown&&genFound.marksPerCm?null:1);
+$("gen-cm").onclick=()=>genUse(10);
+$("gen-manual").onclick=()=>startTicks();
 
 // ---------- ruler box ----------
 let rbox=null,rdrag=false;
@@ -397,7 +521,7 @@ $("ruler-detect").onclick=()=>defer(()=>{
                      Math.abs(rbox[2]-rbox[0]),Math.abs(rbox[3]-rbox[1]),
                      src.cols,src.rows,32);
   if(!roi){src.delete();alert("That box is too small — draw a larger one around the ruler.");show("stage-rulerbox");return;}
-  let r=null; try{r=detectRuler(src,roi);}catch(e){$("status").textContent="err "+cvErr(e);}
+  let r=null; try{r=detectRuler(src,roi);}catch(e){setStatus("err "+cvErr(e));}
   src.delete();
   if(r){const p=twoCmTicksNear(r.cmTicks,lesion.centroid[0]);
     if(p){finalize(p);return;}
@@ -407,12 +531,37 @@ $("ruler-detect").onclick=()=>defer(()=>{
 
 // ---------- tap two 1 cm marks ----------
 let tpts=[];
-function startTicks(){drawImgTo($("tickcanvas"));tpts=[];$("ticks-done").disabled=true;show("stage-ticks");}
-function redrawT(){const c=$("tickcanvas"),g=c.getContext("2d");g.drawImage(img,0,0);
-  g.fillStyle="#00e5ff";g.strokeStyle="#00e5ff";g.lineWidth=LW(c);
-  tpts.forEach(p=>{g.beginPath();g.arc(p[0],p[1],DOT(c),0,7);g.fill();});
-  if(tpts.length===2){g.beginPath();g.moveTo(tpts[0][0],tpts[0][1]);g.lineTo(tpts[1][0],tpts[1][1]);g.stroke();}}
-$("tickcanvas").addEventListener("pointerdown",ev=>{if(tpts.length>=2)tpts=[];tpts.push(pos($("tickcanvas"),ev));$("ticks-done").disabled=tpts.length!==2;redrawT();ev.preventDefault();});
+const tkview=newView();    // mutated, never reassigned (attachZoomPan holds it)
+// `why` explains what automatic detection did before landing the user here --
+// arriving on this screen with no explanation reads like the app just ignored
+// the ruler option.
+function startTicks(why){
+  const w=$("ticks-why");
+  w.textContent=why||"";
+  w.classList.toggle("hidden",!why);
+  drawImgTo($("tickcanvas"));tpts=[];
+  tkview.x=tkview.y=0;tkview.s=1;
+  $("ticks-done").disabled=true;show("stage-ticks");redrawT();}
+function redrawT(){const c=$("tickcanvas"),g=c.getContext("2d");
+  g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,c.width,c.height);
+  applyView(g,tkview);g.drawImage(img,0,0);
+  const lw=LW(c)/tkview.s, dot=DOT(c)/tkview.s;
+  g.fillStyle="#00e5ff";g.strokeStyle="#00e5ff";g.lineWidth=lw;
+  tpts.forEach(p=>{g.beginPath();g.arc(p[0],p[1],dot,0,7);g.fill();});
+  if(tpts.length===2){g.beginPath();g.moveTo(tpts[0][0],tpts[0][1]);g.lineTo(tpts[1][0],tpts[1][1]);g.stroke();}
+  $("tk-zoomlvl").textContent=tkview.s.toFixed(1)+"×";
+  $("tick-instruct").textContent = tpts.length===0
+    ? "Zoom in, then tap two marks exactly 1 cm apart."
+    : tpts.length===1 ? "Now tap the next cm mark (1 cm from the first)."
+                      : "Two marks set — tap “Use these”, or tap again to restart.";}
+attachZoomPan($("tickcanvas"),tkview,redrawT,p=>{
+  if(tpts.length>=2)tpts.length=0;
+  tpts.push(p);$("ticks-done").disabled=tpts.length!==2;redrawT();});
+const tkZoom=f=>{const c=$("tickcanvas");
+  zoomAt(tkview,c,f,tkview.x+c.width/tkview.s/2,tkview.y+c.height/tkview.s/2);redrawT();};
+$("tk-zoomin").onclick=()=>tkZoom(1.6);
+$("tk-zoomout").onclick=()=>tkZoom(1/1.6);
+$("tk-zoomreset").onclick=()=>{tkview.x=tkview.y=0;tkview.s=1;redrawT();};
 $("ticks-undo").onclick=()=>{tpts.pop();$("ticks-done").disabled=tpts.length!==2;redrawT();};
 $("ticks-done").onclick=()=>{const d=Math.hypot(tpts[1][0]-tpts[0][0],tpts[1][1]-tpts[0][1]);
   finalize({pxPerCm:d,markers:[tpts[0],tpts[1]]});};
@@ -422,11 +571,41 @@ function showBlurry(){$("blurry-msg").textContent="Photo is too blurry to detect
 $("blurry-retake").onclick=()=>{$("file").value="";$("filepick").value="";show("stage-capture");};
 $("blurry-tap").onclick=()=>startTicks();
 
+// ---------- widest diameter (max caliper / Feret) --------------------------
+// The longest straight line across the lesion -- the clinical sense of
+// "diameter", and what the ABCDE 6 mm rule of thumb refers to. Both endpoints
+// of the longest chord are always convex-hull vertices, so hull first and the
+// brute-force pass is over a handful of points instead of the whole outline.
+function convexHull(pts){
+  const p=pts.map(q=>[q[0],q[1]]).sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+  if(p.length<3) return p;
+  const cross=(o,a,b)=>(a[0]-o[0])*(b[1]-o[1])-(a[1]-o[1])*(b[0]-o[0]);
+  const lo=[]; for(const q of p){ while(lo.length>=2&&cross(lo[lo.length-2],lo[lo.length-1],q)<=0)lo.pop(); lo.push(q); }
+  const up=[]; for(let i=p.length-1;i>=0;i--){ const q=p[i];
+    while(up.length>=2&&cross(up[up.length-2],up[up.length-1],q)<=0)up.pop(); up.push(q); }
+  lo.pop(); up.pop(); return lo.concat(up);
+}
+function widestDiameter(pts){            // -> {px, a, b}
+  const h=convexHull(pts);
+  let best=0,a=h[0]||[0,0],b=h[0]||[0,0];
+  for(let i=0;i<h.length;i++) for(let j=i+1;j<h.length;j++){
+    const d=Math.hypot(h[i][0]-h[j][0],h[i][1]-h[j][1]);
+    if(d>best){best=d;a=h[i];b=h[j];}
+  }
+  return {px:best,a,b};
+}
+
 // ---------- finalize (draw everything + mm) ----------
 function finalize(p){
   const c=$("fcanvas");drawImgTo(c);const g=c.getContext("2d");
-  const mm=10/p.pxPerCm, areaMm2=lesion.areaPx*mm*mm, dia=2*Math.sqrt(lesion.areaPx/Math.PI)*mm;
+  const mm=10/p.pxPerCm, areaMm2=lesion.areaPx*mm*mm;
+  const wide=widestDiameter(lesion.points);
+  const dia=wide.px*mm;                                   // widest across the lesion
+  const equivDia=2*Math.sqrt(lesion.areaPx/Math.PI)*mm;   // equal-area circle, for reference
   drawLesion(g,c);
+  // show which axis was measured, so the number is checkable against the photo
+  g.strokeStyle="#ffd54f";g.lineWidth=LW(c);
+  g.beginPath();g.moveTo(wide.a[0],wide.a[1]);g.lineTo(wide.b[0],wide.b[1]);g.stroke();
   // label lesion with real size
   g.fillStyle="#00e676";g.font=`bold ${Math.max(20,c.width/45)}px system-ui`;
   g.fillText(`${areaMm2.toFixed(1)} mm2  (D ${dia.toFixed(1)} mm)`,lesion.bbox[0],Math.max(30,lesion.bbox[1]-12));
@@ -435,15 +614,155 @@ function finalize(p){
   g.fillStyle="#00e5ff";g.strokeStyle="#00e5ff";g.lineWidth=LW(c);
   m.forEach(pt=>{g.beginPath();g.arc(pt[0],pt[1],DOT(c),0,7);g.fill();});
   g.beginPath();g.moveTo(m[0][0],m[0][1]);g.lineTo(m[1][0],m[1][1]);g.stroke();
-  g.fillText("1 cm",Math.min(m[0][0],m[1][0]),Math.min(m[0][1],m[1][1])-14);
+  g.fillText(p.spanLabel||"1 cm",Math.min(m[0][0],m[1][0]),Math.min(m[0][1],m[1][1])-14);
   $("final-method").textContent="Result — ruler-calibrated";
-  $("fstats").innerHTML=`Diameter: <b>${dia.toFixed(1)} mm</b><br>Area: <b>${areaMm2.toFixed(1)} mm²</b><br>`+
+  $("fstats").innerHTML=`Diameter (widest): <b>${dia.toFixed(1)} mm</b><br>Area: <b>${areaMm2.toFixed(1)} mm²</b><br>`+
+    `Equivalent circle: ${equivDia.toFixed(1)} mm<br>`+
     `Scale: ${p.pxPerCm.toFixed(0)} px/cm<br>Lesion area: ${Math.round(lesion.areaPx).toLocaleString()} px`;
+  const saved=storeResult(areaMm2,dia,p.pxPerCm);
+  $("fstats").innerHTML+=saved
+    ? `<br><span class="steady">Saved for comparison.</span>`
+    : `<br><span class="grew">Couldn't save (storage full).</span>`;
   show("stage-final");
 }
+
+// ---------- saved results (for comparing the same lesion over time) --------
+// The annotated result canvas is full-resolution, far too big for
+// localStorage, so each record keeps a downscaled JPEG of the *annotated*
+// image plus its measurements. Oldest records are dropped when the quota is
+// hit rather than losing the save outright.
+const RESULTS_KEY="results", MAX_RESULTS=12, THUMB_MAX=700;
+// Comparison crop: a fixed *physical* window centred on the lesion, rendered
+// at a fixed pixel size. Cropping by lesion size instead would normalise the
+// growth away, and cropping by pixels would make the photo taken closer look
+// bigger -- with a fixed mm window, two crops are directly comparable and a
+// real size change is visible side by side.
+const CROP_MM=25, CROP_PX=560;
+function lesionCrop(pxPerCm,widestMm){
+  const c=$("fcanvas");
+  // widen the window if the lesion would not comfortably fit in 25 mm
+  const mmWin=Math.max(CROP_MM,widestMm*1.6);
+  const halfPx=(mmWin/2)*(pxPerCm/10);
+  const cx=lesion.centroid[0], cy=lesion.centroid[1];
+  const t=document.createElement("canvas"); t.width=t.height=CROP_PX;
+  const g=t.getContext("2d");
+  g.fillStyle="#000"; g.fillRect(0,0,CROP_PX,CROP_PX);   // pad if near an edge
+  g.drawImage(c, cx-halfPx, cy-halfPx, halfPx*2, halfPx*2, 0, 0, CROP_PX, CROP_PX);
+  return {data:t.toDataURL("image/jpeg",0.75), mm:+mmWin.toFixed(1)};
+}
+function loadResults(){try{return JSON.parse(localStorage.getItem(RESULTS_KEY)||"[]");}catch(e){return [];}}
+function writeResults(list){
+  let l=list.slice(-MAX_RESULTS);
+  for(;;){
+    try{ localStorage.setItem(RESULTS_KEY,JSON.stringify(l)); return true; }
+    catch(e){ if(l.length<=1) return false; l=l.slice(1); }
+  }
+}
+function storeResult(areaMm2,dia,pxPerCm){
+  const c=$("fcanvas");
+  const s=Math.min(1,THUMB_MAX/Math.max(c.width,c.height));
+  const t=document.createElement("canvas");
+  t.width=Math.round(c.width*s); t.height=Math.round(c.height*s);
+  t.getContext("2d").drawImage(c,0,0,t.width,t.height);
+  const crop=lesionCrop(pxPerCm,dia);
+  const list=loadResults();
+  list.push({ id:Date.now(), t:new Date().toISOString(), name:imgName,
+              areaMm2:+areaMm2.toFixed(1), diaMm:+dia.toFixed(1),
+              // how diaMm was measured. Records written before the switch have
+              // no dm and hold an equal-area-circle diameter, which reads
+              // smaller -- comparing across the two would fake a jump.
+              dm:"widest",
+              pxPerCm:+pxPerCm.toFixed(1), areaPx:Math.round(lesion.areaPx),
+              crop:crop.data, cropMm:crop.mm,
+              img:t.toDataURL("image/jpeg",0.75) });
+  return writeResults(list);
+}
+const fmtDate=iso=>{const d=new Date(iso);
+  return d.toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"});};
+function updateCompareUI(){
+  const n=loadResults().length;
+  $("saved-count").textContent=n;
+  $("compare-open").classList.toggle("hidden",n===0);
+  $("compare-open").disabled=n<2;
+}
+
+// ---------- gallery: pick two saved results ----------
+let gsel=[];
+function renderGallery(){
+  const list=loadResults().slice().sort((a,b)=>new Date(b.t)-new Date(a.t));
+  const g=$("gallery");
+  g.innerHTML = list.length ? "" : '<p class="hint">No saved measurements yet.</p>';
+  list.forEach(r=>{
+    const i=gsel.indexOf(r.id);
+    const d=document.createElement("div");
+    d.className="gitem"+(i>=0?" sel":"");
+    d.innerHTML=`<img src="${r.img}" alt="">
+      <div class="meta">${fmtDate(r.t)}<br><b>${r.diaMm} mm</b> · ${r.areaMm2} mm²
+      ${i>=0?`<div class="pick">selected ${i+1} of 2</div>`:""}</div>`;
+    d.onclick=()=>{
+      const at=gsel.indexOf(r.id);
+      if(at>=0) gsel.splice(at,1);
+      else { if(gsel.length>=2) gsel.shift(); gsel.push(r.id); }
+      renderGallery();
+    };
+    g.appendChild(d);
+  });
+  $("gal-go").disabled=gsel.length!==2;
+  $("gal-del").disabled=gsel.length===0;
+  $("gal-instruct").textContent = gsel.length===0 ? "Pick two saved measurements to compare."
+    : gsel.length===1 ? "Pick one more." : "Two picked — tap Compare.";
+}
+$("compare-open").onclick=()=>{gsel=[];renderGallery();show("stage-gallery");};
+$("gal-back").onclick=()=>show("stage-capture");
+$("gal-del").onclick=()=>{
+  if(!confirm(`Delete ${gsel.length} saved measurement(s)? This can't be undone.`))return;
+  writeResults(loadResults().filter(r=>!gsel.includes(r.id)));
+  gsel=[];renderGallery();updateCompareUI();
+};
+$("cmp-back").onclick=()=>{renderGallery();show("stage-gallery");};
+
+// ---------- compare two results ----------
+$("gal-go").onclick=()=>{
+  const byId=Object.fromEntries(loadResults().map(r=>[r.id,r]));
+  const pair=gsel.map(id=>byId[id]).sort((a,b)=>new Date(a.t)-new Date(b.t)); // older first
+  const [a,b]=pair;
+  $("cmp-imgs").innerHTML=pair.map((r,i)=>
+    `<div><img src="${r.crop||r.img}" alt=""><div class="cap"><b>${i?"Later":"Earlier"}</b><br>
+     ${fmtDate(r.t)}<br>${r.diaMm} mm · ${r.areaMm2} mm²</div></div>`).join("");
+  const days=Math.round((new Date(b.t)-new Date(a.t))/86400000);
+  const dDia=b.diaMm-a.diaMm, dArea=b.areaMm2-a.areaMm2;
+  const pctDia=a.diaMm? dDia/a.diaMm*100 : 0;
+  const pctArea=a.areaMm2? dArea/a.areaMm2*100 : 0;
+  // Below ~10% on diameter the two measurements are within the noise of
+  // re-photographing and re-calibrating, so don't call that a change.
+  const cls=Math.abs(pctDia)<10?"steady":(pctDia>0?"grew":"shrank");
+  const word=Math.abs(pctDia)<10?"No clear change":(pctDia>0?"Larger":"Smaller");
+  const sgn=v=>(v>0?"+":"")+v.toFixed(1);
+  $("cmp-delta").innerHTML=
+    `<span class="big ${cls}">${word}</span>`+
+    `Diameter: ${a.diaMm} → ${b.diaMm} mm (<b>${sgn(dDia)} mm</b>, ${sgn(pctDia)}%)<br>`+
+    `Area: ${a.areaMm2} → ${b.areaMm2} mm² (<b>${sgn(dArea)} mm²</b>, ${sgn(pctArea)}%)<br>`+
+    `Time between photos: <b>${days} day${days===1?"":"s"}</b><br>`+
+    `Scale used: ${a.pxPerCm} → ${b.pxPerCm} px/cm`+
+    (Math.abs(pctDia)<10?`<br><span class="hint">Differences under 10% are within
+      re-measurement error — treat as unchanged.</span>`:"")+
+    (a.cropMm&&b.cropMm&&a.cropMm!==b.cropMm
+      ? `<br><span class="hint">The two crops cover ${a.cropMm} mm and ${b.cropMm} mm
+         of skin, so they are not shown at the same magnification — compare the
+         numbers rather than the pictures.</span>`
+      : (a.cropMm&&b.cropMm
+        ? `<br><span class="hint">Both crops cover ${a.cropMm} mm of skin, so
+           they are at the same scale — the size difference you see is real.</span>` : ""))+
+    ((a.dm||"equiv")!==(b.dm||"equiv")
+      ? `<br><span class="grew">These two measured diameter differently
+         (the older one used the equal-area circle, which reads smaller), so the
+         diameter change above is not a like-for-like comparison. The area
+         figures are still comparable.</span>` : "");
+  show("stage-compare");
+};
 function tickCenter(t){const xs=t.corners.map(p=>p[0]),ys=t.corners.map(p=>p[1]);
   return [xs.reduce((s,v)=>s+v,0)/xs.length, ys.reduce((s,v)=>s+v,0)/ys.length];}
-$("restart").onclick=()=>{$("file").value="";$("filepick").value="";show("stage-capture");};
+$("restart").onclick=()=>{$("file").value="";$("filepick").value="";updateCompareUI();show("stage-capture");};
 </script>
 <script async src="vendor/opencv.js" onload="if(cv.getBuildInformation){onOpenCvReady()}else{cv['onRuntimeInitialized']=onOpenCvReady}"></script>
 </body>
