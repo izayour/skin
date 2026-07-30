@@ -55,6 +55,18 @@
   .optline { display:flex; gap:8px; align-items:flex-start; margin-top:10px;
              font-size:13px; color:#bbb; line-height:1.4; }
   .optline input { width:20px; height:20px; flex:0 0 auto; margin:0; }
+  /* full-screen view of one comparison image. The id beats .hidden on
+     specificity, so the hidden state has to be spelled out for the id too. */
+  #lightbox { position:fixed; inset:0; z-index:50; background:#000000ee;
+              display:flex; flex-direction:column; align-items:center;
+              justify-content:center; padding:12px; }
+  #lightbox.hidden { display:none; }
+  #lightbox img { max-width:100%; max-height:74vh; object-fit:contain;
+                  border-radius:8px; }
+  #lb-cap { color:#eee; font-size:14px; line-height:1.5; text-align:center;
+            margin-top:12px; }
+  #lightbox button { max-width:340px; margin-top:14px; }
+  .cmp img { cursor:zoom-in; }
 </style>
 </head>
 <body>
@@ -71,7 +83,7 @@
     <button onclick="document.getElementById('file').click()">Take a photo</button>
     <button class="secondary" onclick="document.getElementById('filepick').click()">Choose from gallery</button>
     <button class="secondary" id="demo">Try the demo photo</button>
-    <button class="secondary hidden" id="compare-open">Compare over time (<span id="saved-count">0</span> saved)</button>
+    <button class="secondary" id="compare-open" disabled>Compare over time</button>
     <label class="optline"><input type="checkbox" id="genruler-on">
       General ruler — plain mm/cm markings, no colour strip</label>
     <p class="disclaimer">Not a medical device. For demonstration only — does not diagnose.<br>
@@ -106,8 +118,9 @@
       <button class="secondary" id="lm-zoomin">+</button>
       <button class="secondary" id="lm-zoomreset" style="width:auto;padding:10px 14px;font-size:14px">Fit</button>
     </div>
-    <div class="row"><button id="lm-done" disabled>Done</button>
-      <button id="lm-undo" class="secondary">Undo</button></div>
+    <div class="row tight"><button id="lm-done" disabled>Done</button>
+      <button id="lm-undo" class="secondary">Undo point</button>
+      <button id="lm-back" class="danger">Cancel</button></div>
   </section>
 
   <section id="stage-review" class="card hidden">
@@ -123,8 +136,9 @@
     <span class="badge">2 · Draw a box around the ruler</span>
     <canvas id="rulercanvas"></canvas>
     <p class="hint">Couldn't find the ruler automatically — box it, or tap the marks.</p>
-    <div class="row"><button id="ruler-detect" disabled>Detect ticks</button>
-      <button id="ruler-tap" class="secondary">Tap ticks instead</button></div>
+    <div class="row tight"><button id="ruler-detect" disabled>Detect ticks</button>
+      <button id="ruler-tap" class="secondary">Tap ticks</button>
+      <button id="rulerbox-back" class="danger">Back</button></div>
   </section>
 
   <section id="stage-ticks" class="card hidden">
@@ -139,15 +153,17 @@
       <button class="secondary" id="tk-zoomin">+</button>
       <button class="secondary" id="tk-zoomreset" style="width:auto;padding:8px 12px;font-size:13px">Fit</button>
     </div>
-    <div class="row"><button id="ticks-done" disabled>Use these</button>
-      <button id="ticks-undo" class="secondary">Undo</button></div>
+    <div class="row tight"><button id="ticks-done" disabled>Use these</button>
+      <button id="ticks-undo" class="secondary">Undo mark</button>
+      <button id="ticks-back" class="danger">Back</button></div>
   </section>
 
   <section id="stage-blurry" class="card hidden">
     <span class="badge">Too blurry</span>
     <p class="warn" id="blurry-msg"></p>
-    <button id="blurry-retake">Retake photo</button>
-    <button id="blurry-tap" class="secondary">Tap the ticks anyway</button>
+    <div class="row tight"><button id="blurry-retake">Retake photo</button>
+      <button id="blurry-tap" class="secondary">Tap ticks anyway</button>
+      <button id="blurry-back" class="danger">Back</button></div>
   </section>
 
   <section id="stage-genruler" class="card hidden">
@@ -158,6 +174,7 @@
     <div class="row tight"><button id="gen-mm">1 mm apart</button>
       <button id="gen-cm" class="secondary">1 cm apart</button>
       <button id="gen-manual" class="secondary">Tap ticks</button></div>
+    <button id="gen-back" class="danger">Reject — back to lesion</button>
   </section>
 
   <section id="stage-gallery" class="card hidden">
@@ -172,6 +189,7 @@
   <section id="stage-compare" class="card hidden">
     <span class="badge">Change over time</span>
     <div class="cmp" id="cmp-imgs"></div>
+    <p class="hint">Double-tap either photo to see it full screen.</p>
     <div class="delta" id="cmp-delta"></div>
     <p class="disclaimer">Sizes come from each photo's own ruler calibration, so
       small differences may be measurement error rather than real change. Not a
@@ -183,13 +201,19 @@
     <span class="badge" id="final-method">Result</span>
     <canvas id="fcanvas"></canvas>
     <div class="stats" id="fstats"></div>
-    <button id="restart" class="secondary">New photo</button>
+    <div class="row tight"><button id="restart" class="secondary">New photo</button>
+      <button id="redo-scale" class="danger">Reject &amp; redo scale</button></div>
   </section>
+  <div id="lightbox" class="hidden">
+    <img id="lb-img" alt="">
+    <div id="lb-cap"></div>
+    <button id="lb-close" class="secondary">Back to comparison</button>
+  </div>
 </main>
 
-<script src="js/pipeline.js?v=40"></script>
-<script src="js/ruler.js?v=40"></script>
-<script src="js/genruler.js?v=40"></script>
+<script src="js/pipeline.js?v=43"></script>
+<script src="js/ruler.js?v=43"></script>
+<script src="js/genruler.js?v=43"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
@@ -419,6 +443,10 @@ $("lm-zoomin").onclick=()=>lmZoom(1.6);
 $("lm-zoomout").onclick=()=>lmZoom(1/1.6);
 $("lm-zoomreset").onclick=()=>{lmview.x=lmview.y=0;lmview.s=1;redrawLM();};
 $("lm-undo").onclick=()=>{lmpts.pop();$("lm-done").disabled=lmpts.length<3;redrawLM();};
+// back to drawing the box, discarding the half-finished trace
+$("lm-back").onclick=()=>{drawImgTo($("canvas"));if(lbox)redrawL();boxInstruct();
+  $("detect").disabled=!(lbox&&Math.abs(lbox[2]-lbox[0])>10&&Math.abs(lbox[3]-lbox[1])>10);
+  show("stage-box");};
 $("lm-done").onclick=()=>{
   const pts=lmpts.slice();
   const area=polyArea(pts);
@@ -515,6 +543,12 @@ $("rulercanvas").addEventListener("pointerdown",ev=>{const[x,y]=pos($("rulercanv
 $("rulercanvas").addEventListener("pointermove",ev=>{if(!rdrag)return;const[x,y]=pos($("rulercanvas"),ev);rbox[2]=x;rbox[3]=y;redrawR();ev.preventDefault();});
 $("rulercanvas").addEventListener("pointerup",()=>{rdrag=false;if(rbox&&Math.abs(rbox[2]-rbox[0])>15&&Math.abs(rbox[3]-rbox[1])>15)$("ruler-detect").disabled=false;});
 $("ruler-tap").onclick=()=>startTicks();
+// every ruler-stage "back" returns to the lesion result, which is the last
+// thing the user actually approved
+$("rulerbox-back").onclick=()=>showReview();
+$("ticks-back").onclick=()=>showReview();
+$("blurry-back").onclick=()=>showReview();
+$("gen-back").onclick=()=>showReview();
 $("ruler-detect").onclick=()=>defer(()=>{
   const src=cleanSrc();
   const roi=clampRoi(Math.min(rbox[0],rbox[2]),Math.min(rbox[1],rbox[3]),
@@ -642,6 +676,10 @@ function finalize(p){
 // image plus its measurements. Oldest records are dropped when the quota is
 // hit rather than losing the save outright.
 const RESULTS_KEY="results", MAX_RESULTS=12, THUMB_MAX=700;
+// id of the record written by the current run, so rejecting the result can
+// take it back out again -- a rejected measurement must not linger in the
+// comparison history
+let lastSavedId=null;
 // Comparison crop: a fixed *physical* window centred on the lesion, rendered
 // at a fixed pixel size. Cropping by lesion size instead would normalise the
 // growth away, and cropping by pixels would make the photo taken closer look
@@ -675,7 +713,8 @@ function storeResult(areaMm2,dia,pxPerCm,crop){
   t.width=Math.round(c.width*s); t.height=Math.round(c.height*s);
   t.getContext("2d").drawImage(c,0,0,t.width,t.height);
   const list=loadResults();
-  list.push({ id:Date.now(), t:new Date().toISOString(), name:imgName,
+  lastSavedId=Date.now();
+  list.push({ id:lastSavedId, t:new Date().toISOString(), name:imgName,
               areaMm2:+areaMm2.toFixed(1), diaMm:+dia.toFixed(1),
               // how diaMm was measured. Records written before the switch have
               // no dm and hold an equal-area-circle diameter, which reads
@@ -688,11 +727,18 @@ function storeResult(areaMm2,dia,pxPerCm,crop){
 }
 const fmtDate=iso=>{const d=new Date(iso);
   return d.toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"});};
+// Always show this button. Hiding it at zero made the feature look missing --
+// and it reads as missing on a URL where nothing is saved yet, because browser
+// storage is per-origin: measurements taken on the LAN test address are not
+// visible on the published site, and vice versa.
 function updateCompareUI(){
   const n=loadResults().length;
-  $("saved-count").textContent=n;
-  $("compare-open").classList.toggle("hidden",n===0);
-  $("compare-open").disabled=n<2;
+  const b=$("compare-open");
+  b.classList.remove("hidden");
+  b.disabled=n<2;
+  b.textContent = n>=2 ? `Compare over time (${n} saved)`
+                : n===1 ? "Compare over time — 1 saved, needs 2"
+                        : "Compare over time — measure a lesion first";
 }
 
 // ---------- gallery: pick two saved results ----------
@@ -730,6 +776,23 @@ $("gal-del").onclick=()=>{
 };
 $("cmp-back").onclick=()=>{renderGallery();show("stage-gallery");};
 
+// ---------- full-screen view of one comparison photo ----------
+// Three ways out, because a full-screen overlay with no obvious exit is a
+// trap on a phone: the button, tapping the backdrop, or Escape.
+function openLightbox(rec,when){
+  $("lb-img").src=rec.crop||rec.img;
+  $("lb-cap").innerHTML=`<b>${when}</b> · ${fmtDate(rec.t)}<br>`+
+    `${rec.diaMm} mm · ${rec.areaMm2} mm²`+
+    (rec.cropMm?`<br><span class="hint">${rec.cropMm} mm of skin across</span>`
+               :`<br><span class="grew">whole photo (saved by an older version)</span>`);
+  $("lightbox").classList.remove("hidden");
+}
+function closeLightbox(){ $("lightbox").classList.add("hidden"); $("lb-img").src=""; }
+$("lb-close").onclick=closeLightbox;
+$("lightbox").addEventListener("click",e=>{ if(e.target===$("lightbox")) closeLightbox(); });
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape"&&!$("lightbox").classList.contains("hidden")) closeLightbox(); });
+
 // ---------- compare two results ----------
 $("gal-go").onclick=()=>{
   const byId=Object.fromEntries(loadResults().map(r=>[r.id,r]));
@@ -740,6 +803,16 @@ $("gal-go").onclick=()=>{
      ${fmtDate(r.t)}<br>${r.diaMm} mm · ${r.areaMm2} mm²${
        r.crop?"":'<br><span class="grew">whole photo</span>'}</div></div>`).join("");
   const legacy=pair.filter(r=>!r.crop).length;
+  // double-tap a photo to see it full screen. Detected from pointerup rather
+  // than the dblclick event so mouse and touch behave the same way.
+  [...$("cmp-imgs").querySelectorAll("img")].forEach((el,i)=>{
+    let last=0;
+    el.addEventListener("pointerup",()=>{
+      const now=Date.now();
+      if(now-last<350){ last=0; openLightbox(pair[i],i?"Later":"Earlier"); }
+      else last=now;
+    });
+  });
   const days=Math.round((new Date(b.t)-new Date(a.t))/86400000);
   const dDia=b.diaMm-a.diaMm, dArea=b.areaMm2-a.areaMm2;
   const pctDia=a.diaMm? dDia/a.diaMm*100 : 0;
@@ -779,7 +852,17 @@ $("gal-go").onclick=()=>{
 };
 function tickCenter(t){const xs=t.corners.map(p=>p[0]),ys=t.corners.map(p=>p[1]);
   return [xs.reduce((s,v)=>s+v,0)/xs.length, ys.reduce((s,v)=>s+v,0)/ys.length];}
-$("restart").onclick=()=>{$("file").value="";$("filepick").value="";updateCompareUI();show("stage-capture");};
+$("restart").onclick=()=>{lastSavedId=null;$("file").value="";$("filepick").value="";
+  updateCompareUI();show("stage-capture");};
+// Reject the finished measurement: drop the record it just saved, keep the
+// approved lesion outline, and go back to calibrating the scale.
+$("redo-scale").onclick=()=>{
+  if(lastSavedId!==null){
+    writeResults(loadResults().filter(r=>r.id!==lastSavedId));
+    lastSavedId=null; updateCompareUI();
+  }
+  showReview();
+};
 </script>
 <script async src="vendor/opencv.js" onload="if(cv.getBuildInformation){onOpenCvReady()}else{cv['onRuntimeInitialized']=onOpenCvReady}"></script>
 </body>
