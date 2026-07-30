@@ -162,8 +162,9 @@
     <span class="badge">Too blurry</span>
     <p class="warn" id="blurry-msg"></p>
     <div class="row tight"><button id="blurry-retake">Retake photo</button>
-      <button id="blurry-tap" class="secondary">Tap ticks anyway</button>
-      <button id="blurry-back" class="danger">Back</button></div>
+      <button id="blurry-box" class="secondary">Box the ruler</button>
+      <button id="blurry-tap" class="secondary">Tap ticks</button></div>
+    <button id="blurry-back" class="danger">Back to lesion</button>
   </section>
 
   <section id="stage-genruler" class="card hidden">
@@ -211,21 +212,27 @@
   </div>
 </main>
 
-<script src="js/pipeline.js?v=43"></script>
-<script src="js/ruler.js?v=43"></script>
-<script src="js/genruler.js?v=43"></script>
+<script src="js/pipeline.js?v=47"></script>
+<script src="js/ruler.js?v=47"></script>
+<script src="js/genruler.js?v=47"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
 // Read the build number off the ?v= cache-buster rather than hardcoding it
 // again here -- one place to bump, so the displayed version can't drift from
 // the code actually loaded.
+// Release line, bumped by hand at a code freeze. The build number below is the
+// ?v= cache-buster and keeps incrementing during development, so a screen can
+// always be pinned to an exact build -- which is how a stale cached page gets
+// spotted. Both are shown: the release says which version you have, the build
+// says whether the refresh actually took.
+const APP_RELEASE="2.0";
 const APP_VERSION=(()=>{
   const s=document.querySelector('script[src*="pipeline.js"]');
   const m=s&&s.getAttribute("src").match(/v=(\d+)/);
   return m?m[1]:"?";
 })();
-$("appver").textContent="Version "+APP_VERSION;
+$("appver").textContent=`v${APP_RELEASE} (build ${APP_VERSION})`;
 const STAGES=["stage-capture","stage-box","stage-lmanual","stage-review","stage-rulerbox","stage-ticks","stage-blurry","stage-final","stage-genruler","stage-gallery","stage-compare","spinner"];
 const show=id=>STAGES.forEach(s=>$(s).classList.toggle("hidden",s!==id));
 const defer=fn=>{show("spinner");setTimeout(fn,30);};   // let spinner paint before heavy work
@@ -351,24 +358,129 @@ function attachZoomPan(c,v,redraw,onTap){
   c.addEventListener("pointercancel",end);
 }
 
+// ---------- make any image canvas zoomable --------------------------------
+// Two flavours. Canvases that only display can pan with one finger. Canvases
+// where one finger DRAWS a box (lesion, ruler) get pinch-to-zoom and the
+// buttons instead, and their drawing handler stands down while two fingers are
+// down -- otherwise a pinch would drag a box across the photo.
+const zoomViews={}, zoomRedraws={}, zoomLabels={};
+// drawImgTo() resizes the canvas, which wipes any transform, so the view has
+// to go back to fit whenever a stage redraws from scratch
+function resetView(id){const v=zoomViews[id]; if(v){v.x=v.y=0;v.s=1;}}
+
+function addZoomRow(canvasId){
+  const c=$(canvasId), v=zoomViews[canvasId];
+  const row=document.createElement("div"); row.className="zoomrow";
+  const mk=(t,st)=>{const b=document.createElement("button");b.className="secondary";
+    b.textContent=t; if(st)b.setAttribute("style",st); return b;};
+  const minus=mk("−"), plus=mk("+"), fit=mk("Fit","width:auto;padding:8px 12px;font-size:13px");
+  const lab=document.createElement("span"); lab.className="zoomlvl"; lab.textContent="1.0×";
+  row.append(minus,lab,plus,fit);
+  c.parentNode.insertBefore(row,c.nextSibling);
+  zoomLabels[canvasId]=lab;
+  const zoom=f=>{zoomAt(v,c,f,v.x+c.width/v.s/2,v.y+c.height/v.s/2);zoomRedraws[canvasId]();};
+  minus.onclick=()=>zoom(1/1.6);
+  plus.onclick=()=>zoom(1.6);
+  fit.onclick=()=>{v.x=v.y=0;v.s=1;zoomRedraws[canvasId]();};
+}
+function setZoomLabel(canvasId){
+  const l=zoomLabels[canvasId];
+  if(l) l.textContent=zoomViews[canvasId].s.toFixed(1)+"×";
+}
+
+// display-only canvas: snapshot whatever has been drawn, then re-render that
+// snapshot under the view. Avoids re-running each stage's drawing code on zoom.
+function setupSnapshotZoom(canvasId){
+  const c=$(canvasId), v=zoomViews[canvasId]=newView();
+  const snap=document.createElement("canvas");
+  const redraw=()=>{
+    const g=c.getContext("2d");
+    g.setTransform(1,0,0,1,0,0); g.clearRect(0,0,c.width,c.height);
+    applyView(g,v);
+    if(snap.width) g.drawImage(snap,0,0);
+    setZoomLabel(canvasId);
+  };
+  zoomRedraws[canvasId]=redraw;
+  attachZoomPan(c,v,redraw,null);
+  addZoomRow(canvasId);
+  return ()=>{                       // call once the stage has drawn its content
+    snap.width=c.width; snap.height=c.height;
+    const sg=snap.getContext("2d");
+    sg.setTransform(1,0,0,1,0,0); sg.clearRect(0,0,snap.width,snap.height);
+    sg.drawImage(c,0,0);
+    v.x=v.y=0; v.s=1; redraw();
+  };
+}
+
+// box-drawing canvas: pinch + buttons only. Returns isMulti() so the drawing
+// handlers can ignore events while a pinch is in progress.
+function setupPinchZoom(canvasId,redraw,onPinchStart){
+  const c=$(canvasId), v=zoomViews[canvasId]=newView();
+  zoomRedraws[canvasId]=redraw;
+  const ptrs=new Map(); let dist=0;
+  c.addEventListener("pointerdown",ev=>{
+    ptrs.set(ev.pointerId,{x:ev.clientX,y:ev.clientY});
+    if(ptrs.size===2){const p=[...ptrs.values()];
+      dist=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);
+      // The first finger of a pinch already looked like the start of a box
+      // drag, so undo that before zooming.
+      if(onPinchStart) onPinchStart();}
+  });
+  c.addEventListener("pointermove",ev=>{
+    if(!ptrs.has(ev.pointerId))return;
+    ptrs.set(ev.pointerId,{x:ev.clientX,y:ev.clientY});
+    if(ptrs.size<2)return;
+    const p=[...ptrs.values()];
+    const d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);
+    if(dist>0&&d>0){
+      const r=c.getBoundingClientRect();
+      const mx=((p[0].x+p[1].x)/2-r.left)*c.width/r.width;
+      const my=((p[0].y+p[1].y)/2-r.top)*c.height/r.height;
+      zoomAt(v,c,d/dist,mx/v.s+v.x,my/v.s+v.y);
+      redraw();
+    }
+    dist=d;
+    ev.preventDefault();
+  });
+  const end=ev=>{ ptrs.delete(ev.pointerId); if(ptrs.size<2) dist=0; };
+  c.addEventListener("pointerup",end);
+  c.addEventListener("pointercancel",end);
+  addZoomRow(canvasId);
+  return ()=>ptrs.size>=2;
+}
+
 // ---------- load photo ----------
 const onPicked=e=>{if(e.target.files[0]){imgName=e.target.files[0].name;loadFrom(URL.createObjectURL(e.target.files[0]));}};
 $("file").addEventListener("change",onPicked);
 $("filepick").addEventListener("change",onPicked);
 $("demo").onclick=()=>{imgName="demo:half.jpg";loadFrom("half.jpg");};
-function loadFrom(src){img=new Image();img.onload=()=>{lbox=null;drawImgTo($("canvas"));$("detect").disabled=true;boxInstruct();show("stage-box");};img.src=src;}
+function loadFrom(src){img=new Image();img.onload=()=>{lbox=null;drawImgTo($("canvas"));
+  resetView("canvas");redrawL();$("detect").disabled=true;boxInstruct();show("stage-box");};img.src=src;}
 
 // ---------- stage 1: lesion box ----------
 let lbox=null,ldrag=false;
-function redrawL(){const c=$("canvas"),g=c.getContext("2d");g.drawImage(img,0,0);
-  if(lbox){g.strokeStyle="#00e676";g.lineWidth=LW(c);g.strokeRect(lbox[0],lbox[1],lbox[2]-lbox[0],lbox[3]-lbox[1]);}}
+function redrawL(){const c=$("canvas"),g=c.getContext("2d"),v=zoomViews["canvas"];
+  g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,c.width,c.height);
+  applyView(g,v);g.drawImage(img,0,0);
+  if(lbox){g.strokeStyle="#00e676";g.lineWidth=LW(c)/v.s;
+    g.strokeRect(lbox[0],lbox[1],lbox[2]-lbox[0],lbox[3]-lbox[1]);}
+  setZoomLabel("canvas");}
+let lboxPrev=null;            // box as it was before the current drag began
+const boxMulti=setupPinchZoom("canvas",redrawL,()=>{
+  ldrag=false; lbox=lboxPrev; redrawL(); boxInstruct();
+  $("detect").disabled=!(lbox&&Math.abs(lbox[2]-lbox[0])>10&&Math.abs(lbox[3]-lbox[1])>10);
+});
+const lview=zoomViews["canvas"];
 function boxInstruct(){
   const big=lbox&&Math.abs(lbox[2]-lbox[0])>10&&Math.abs(lbox[3]-lbox[1])>10;
   $("box-instruct").textContent = big
     ? "Box drawn — tap “Detect lesion”. Drag again to redraw it."
     : "Drag your finger across the photo to draw a box around the lesion.";}
-$("canvas").addEventListener("pointerdown",ev=>{const[x,y]=pos($("canvas"),ev);lbox=[x,y,x,y];ldrag=true;ev.preventDefault();});
-$("canvas").addEventListener("pointermove",ev=>{if(!ldrag)return;const[x,y]=pos($("canvas"),ev);lbox[2]=x;lbox[3]=y;redrawL();ev.preventDefault();});
+$("canvas").addEventListener("pointerdown",ev=>{if(boxMulti()){ldrag=false;return;}
+  lboxPrev=lbox?lbox.slice():null;
+  const[x,y]=pos($("canvas"),ev,lview);lbox=[x,y,x,y];ldrag=true;ev.preventDefault();});
+$("canvas").addEventListener("pointermove",ev=>{if(boxMulti()){ldrag=false;return;}
+  if(!ldrag)return;const[x,y]=pos($("canvas"),ev,lview);lbox[2]=x;lbox[3]=y;redrawL();ev.preventDefault();});
 $("canvas").addEventListener("pointerup",()=>{ldrag=false;if(lbox&&Math.abs(lbox[2]-lbox[0])>10&&Math.abs(lbox[3]-lbox[1])>10)$("detect").disabled=false;boxInstruct();});
 $("rebox").onclick=()=>{$("file").value="";$("filepick").value="";show("stage-capture");};
 $("detect").onclick=()=>defer(()=>{
@@ -444,7 +556,7 @@ $("lm-zoomout").onclick=()=>lmZoom(1/1.6);
 $("lm-zoomreset").onclick=()=>{lmview.x=lmview.y=0;lmview.s=1;redrawLM();};
 $("lm-undo").onclick=()=>{lmpts.pop();$("lm-done").disabled=lmpts.length<3;redrawLM();};
 // back to drawing the box, discarding the half-finished trace
-$("lm-back").onclick=()=>{drawImgTo($("canvas"));if(lbox)redrawL();boxInstruct();
+$("lm-back").onclick=()=>{drawImgTo($("canvas"));resetView("canvas");redrawL();boxInstruct();
   $("detect").disabled=!(lbox&&Math.abs(lbox[2]-lbox[0])>10&&Math.abs(lbox[3]-lbox[1])>10);
   show("stage-box");};
 $("lm-done").onclick=()=>{
@@ -461,8 +573,11 @@ $("lm-done").onclick=()=>{
 function drawLesion(g,c){g.strokeStyle="#00e676";g.lineWidth=LW(c);g.beginPath();
   lesion.points.forEach((p,i)=>i?g.lineTo(p[0],p[1]):g.moveTo(p[0],p[1]));g.closePath();g.stroke();
   g.fillStyle="#ff1744";g.beginPath();g.arc(lesion.centroid[0],lesion.centroid[1],DOT(c),0,7);g.fill();}
-function showReview(){const c=$("rcanvas");drawImgTo(c);drawLesion(c.getContext("2d"),c);show("stage-review");}
-$("reject").onclick=()=>{drawImgTo($("canvas"));lbox=null;$("detect").disabled=true;boxInstruct();show("stage-box");};
+const captureReviewZoom=setupSnapshotZoom("rcanvas");
+function showReview(){const c=$("rcanvas");drawImgTo(c);drawLesion(c.getContext("2d"),c);
+  captureReviewZoom();show("stage-review");}
+$("reject").onclick=()=>{drawImgTo($("canvas"));lbox=null;resetView("canvas");redrawL();
+  $("detect").disabled=true;boxInstruct();show("stage-box");};
 // reject straight into tracing: the detector already had its go, so skip the
 // box stage rather than making the user redraw a box just to reach the tracer
 $("reject-trace").onclick=()=>{lesion=null;startLManual();};
@@ -497,6 +612,7 @@ $("accept").onclick=()=>defer(()=>{
 // The run of marks is solid evidence of a scale, but pixels cannot say whether
 // the spacing is 1 mm or 1 cm -- so show what was found and let the user say.
 let genFound=null;
+const captureGenZoom=setupSnapshotZoom("gencanvas");
 function showGenRuler(g){
   genFound=g;
   const c=$("gencanvas");drawImgTo(c);const ctx=c.getContext("2d");
@@ -518,6 +634,7 @@ function showGenRuler(g){
   // when the mark pattern settled the unit, one button confirms it
   $("gen-mm").textContent = known ? "Use this scale" : "1 mm apart";
   $("gen-cm").classList.toggle("hidden", !!known);
+  captureGenZoom();
   show("stage-genruler");
 }
 const genUse=mmPerTick=>{
@@ -536,11 +653,25 @@ $("gen-manual").onclick=()=>startTicks();
 
 // ---------- ruler box ----------
 let rbox=null,rdrag=false;
-function startRulerBox(){drawImgTo($("rulercanvas"));rbox=null;$("ruler-detect").disabled=true;show("stage-rulerbox");}
-function redrawR(){const c=$("rulercanvas"),g=c.getContext("2d");g.drawImage(img,0,0);
-  if(rbox){g.strokeStyle="#ff9100";g.lineWidth=LW(c);g.strokeRect(rbox[0],rbox[1],rbox[2]-rbox[0],rbox[3]-rbox[1]);}}
-$("rulercanvas").addEventListener("pointerdown",ev=>{const[x,y]=pos($("rulercanvas"),ev);rbox=[x,y,x,y];rdrag=true;ev.preventDefault();});
-$("rulercanvas").addEventListener("pointermove",ev=>{if(!rdrag)return;const[x,y]=pos($("rulercanvas"),ev);rbox[2]=x;rbox[3]=y;redrawR();ev.preventDefault();});
+function startRulerBox(){drawImgTo($("rulercanvas"));rbox=null;resetView("rulercanvas");
+  redrawR();$("ruler-detect").disabled=true;show("stage-rulerbox");}
+function redrawR(){const c=$("rulercanvas"),g=c.getContext("2d"),v=zoomViews["rulercanvas"];
+  g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,c.width,c.height);
+  applyView(g,v);g.drawImage(img,0,0);
+  if(rbox){g.strokeStyle="#ff9100";g.lineWidth=LW(c)/v.s;
+    g.strokeRect(rbox[0],rbox[1],rbox[2]-rbox[0],rbox[3]-rbox[1]);}
+  setZoomLabel("rulercanvas");}
+let rboxPrev=null;
+const rulerMulti=setupPinchZoom("rulercanvas",redrawR,()=>{
+  rdrag=false; rbox=rboxPrev; redrawR();
+  $("ruler-detect").disabled=!(rbox&&Math.abs(rbox[2]-rbox[0])>15&&Math.abs(rbox[3]-rbox[1])>15);
+});
+const rview=zoomViews["rulercanvas"];
+$("rulercanvas").addEventListener("pointerdown",ev=>{if(rulerMulti()){rdrag=false;return;}
+  rboxPrev=rbox?rbox.slice():null;
+  const[x,y]=pos($("rulercanvas"),ev,rview);rbox=[x,y,x,y];rdrag=true;ev.preventDefault();});
+$("rulercanvas").addEventListener("pointermove",ev=>{if(rulerMulti()){rdrag=false;return;}
+  if(!rdrag)return;const[x,y]=pos($("rulercanvas"),ev,rview);rbox[2]=x;rbox[3]=y;redrawR();ev.preventDefault();});
 $("rulercanvas").addEventListener("pointerup",()=>{rdrag=false;if(rbox&&Math.abs(rbox[2]-rbox[0])>15&&Math.abs(rbox[3]-rbox[1])>15)$("ruler-detect").disabled=false;});
 $("ruler-tap").onclick=()=>startTicks();
 // every ruler-stage "back" returns to the lesion result, which is the last
@@ -601,9 +732,16 @@ $("ticks-done").onclick=()=>{const d=Math.hypot(tpts[1][0]-tpts[0][0],tpts[1][1]
   finalize({pxPerCm:d,markers:[tpts[0],tpts[1]]});};
 
 // ---------- blurry ----------
-function showBlurry(){$("blurry-msg").textContent="Photo is too blurry to detect the ruler — retake in focus.";show("stage-blurry");}
+function showBlurry(){$("blurry-msg").textContent=
+  "The ruler looks too blurry to read automatically. Retaking it in focus is best, "+
+  "but you can also box the ruler to try a tighter area, or tap the two 1 cm marks yourself.";
+  show("stage-blurry");}
 $("blurry-retake").onclick=()=>{$("file").value="";$("filepick").value="";show("stage-capture");};
 $("blurry-tap").onclick=()=>startTicks();
+// Blur is measured on the whole auto-detected ruler region, so a tighter box
+// round just the markings can still be sharp enough to read -- worth offering
+// before making the user retake the photo.
+$("blurry-box").onclick=()=>startRulerBox();
 
 // ---------- widest diameter (max caliper / Feret) --------------------------
 // The longest straight line across the lesion -- the clinical sense of
@@ -630,6 +768,7 @@ function widestDiameter(pts){            // -> {px, a, b}
 }
 
 // ---------- finalize (draw everything + mm) ----------
+const captureFinalZoom=setupSnapshotZoom("fcanvas");
 function finalize(p){
   const c=$("fcanvas");drawImgTo(c);const g=c.getContext("2d");
   const mm=10/p.pxPerCm, areaMm2=lesion.areaPx*mm*mm;
@@ -667,6 +806,7 @@ function finalize(p){
   $("fstats").innerHTML+=saved
     ? `<br><span class="steady">Saved for comparison.</span>`
     : `<br><span class="grew">Couldn't save (storage full).</span>`;
+  captureFinalZoom();   // after the thumbnail and crop have been read off it
   show("stage-final");
 }
 
