@@ -212,9 +212,9 @@
   </div>
 </main>
 
-<script src="js/pipeline.js?v=47"></script>
-<script src="js/ruler.js?v=47"></script>
-<script src="js/genruler.js?v=47"></script>
+<script src="js/pipeline.js?v=48"></script>
+<script src="js/ruler.js?v=48"></script>
+<script src="js/genruler.js?v=48"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
@@ -226,7 +226,7 @@ const $=id=>document.getElementById(id);
 // always be pinned to an exact build -- which is how a stale cached page gets
 // spotted. Both are shown: the release says which version you have, the build
 // says whether the refresh actually took.
-const APP_RELEASE="2.0";
+const APP_RELEASE="2.1-dev";
 const APP_VERSION=(()=>{
   const s=document.querySelector('script[src*="pipeline.js"]');
   const m=s&&s.getAttribute("src").match(/v=(\d+)/);
