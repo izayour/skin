@@ -212,9 +212,9 @@
   </div>
 </main>
 
-<script src="js/pipeline.js?v=48"></script>
-<script src="js/ruler.js?v=48"></script>
-<script src="js/genruler.js?v=48"></script>
+<script src="js/pipeline.js?v=53"></script>
+<script src="js/ruler.js?v=53"></script>
+<script src="js/genruler.js?v=53"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
@@ -503,10 +503,25 @@ $("detect").onclick=()=>defer(()=>{
 });
 
 // ---------- failure log (localStorage, for offline analysis) ----------
+// Ruler problems used to leave no trace at all, so diagnosing one meant
+// guessing from a photo. Same log as lesion failures, tagged by kind.
+function logRulerFailure(kind){
+  try{
+    const log=JSON.parse(localStorage.getItem("faillog")||"[]");
+    log.push({t:new Date().toISOString(), kind:kind||"ruler", img:imgName,
+              imgW:img.naturalWidth, imgH:img.naturalHeight,
+              lesionBBox:lesion?lesion.bbox.map(Math.round):null,
+              genRuler:$("genruler-on").checked,
+              diag:window.__genDiag||null});
+    while(log.length>50) log.shift();
+    localStorage.setItem("faillog",JSON.stringify(log));
+  }catch(e){}
+  updateFailUI();
+}
 function logFailure(box){
   try{
     const log=JSON.parse(localStorage.getItem("faillog")||"[]");
-    log.push({t:new Date().toISOString(), img:imgName,
+    log.push({t:new Date().toISOString(), kind:"lesion", img:imgName,
               imgW:img.naturalWidth, imgH:img.naturalHeight,
               box, reason:window.__segReason||"?",
               trail:window.__segTrail||[]});
@@ -588,10 +603,13 @@ $("accept").onclick=()=>defer(()=>{
     const gr=nearLesionRoi(src.cols,src.rows,lesion.bbox);
     const groi=clampRoi(gr.x,gr.y,gr.w,gr.h,src.cols,src.rows,32);
     let g=null;
-    if(groi){ try{g=detectGenericRuler(src,groi);}catch(e){setStatus("err "+cvErr(e));} }
+    // pass the lesion box so the detector can refuse when the marks it found
+    // are on the lesion rather than on a ruler
+    if(groi){ try{g=detectGenericRuler(src,groi,lesion.bbox);}catch(e){setStatus("err "+cvErr(e));} }
     src.delete();
     if(g){showGenRuler(g);return;}
     const d=window.__genDiag;
+    logRulerFailure("general-ruler");
     startTicks("Automatic detection failed. "+
       (d&&d.reason ? d.reason : "No evenly spaced ruler marks were found near the lesion.")+
       " Tap two marks 1 cm apart instead.");
@@ -629,8 +647,10 @@ function showGenRuler(g){
   $("gen-detail").textContent = known
     ? `${g.count} marks, ${g.pxPerTick.toFixed(1)} px apart. Every ${g.marksPerCm}th mark is `
       + `a long one, so ${g.marksPerCm} marks = 1 cm ⇒ ${g.pxPerCm.toFixed(0)} px/cm.`
-    : `${g.count} marks, ${g.pxPerTick.toFixed(1)} px apart (${g.count-1} gaps ⇒ `
-      + `${g.count-1} mm if millimetre marks, ${g.count-1} cm if centimetre marks).`;
+    : `${g.count} marks, ${g.pxPerTick.toFixed(2)} px apart`
+      + (g.minorPerMajor?` (a long mark every ${g.minorPerMajor} — could be half-centimetres)`:``)
+      + `. If they are millimetres that is ${(g.pxPerTick*10).toFixed(0)} px/cm; `
+      + `if centimetres, ${g.pxPerTick.toFixed(0)} px/cm.`;
   // when the mark pattern settled the unit, one button confirms it
   $("gen-mm").textContent = known ? "Use this scale" : "1 mm apart";
   $("gen-cm").classList.toggle("hidden", !!known);
@@ -639,9 +659,13 @@ function showGenRuler(g){
 }
 const genUse=mmPerTick=>{
   // pxPerCm is what the rest of the app calibrates with. When the long/short
-  // pattern identified the unit, use that directly instead of a chosen one.
-  const pxPerCm = mmPerTick==null ? genFound.pxPerCm
-                                  : genFound.pxPerTick*(10/mmPerTick);
+  // pattern identified the unit, use that directly instead of a chosen one --
+  // and prefer the scale measured AT the lesion: under perspective the pitch
+  // drifts across the frame, and the global figure biased area by 12% on one
+  // of the test photos.
+  const pxPerCm = mmPerTick==null
+    ? (genFound.pxPerCmAtLesion || genFound.pxPerCm)
+    : (genFound.pxPerTickAtLesion || genFound.pxPerTick)*(10/mmPerTick);
   const a=genFound.ticks[0],b=genFound.ticks[genFound.ticks.length-1];
   const spanCm=(genFound.count-1)*genFound.pxPerTick/pxPerCm;
   finalize({pxPerCm,markers:[a,b],
