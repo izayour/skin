@@ -23,6 +23,26 @@ and reports the lesion's real size in millimetres.
 If the photo is too out of focus to read the ruler, the app says so and
 asks for a sharper retake.
 
+## Two image libraries
+
+Images live in two stores (IndexedDB, on the device):
+
+- **Standard** — every image as it was imported, byte for byte. Nothing
+  ever writes back here, so an original survives any amount of processing.
+- **Processed** — one record per original, holding the image as it stands
+  after every step applied to it, plus which steps those were and when.
+  Each step also keeps **its own picture and its own numbers**, cropped to
+  the region it annotated — a lesion outline scaled down to a whole-photo
+  thumbnail is a couple of pixels wide and shows nothing. *Steps* lists
+  them; tap one for full screen.
+
+You start from a step, not from a photo: pressing *Measure a lesion* or
+*Colour calibration* asks which image to run it on and offers only the
+images that step has **not** been applied to yet (tick a box to redo one).
+A processed record keeps its display render separate from its working
+pixels, so a step run after another reads the processed image rather than
+one with outlines and tick markers burnt into it.
+
 This build uses **no machine-learning model** — everything is classical
 OpenCV, so it's small and runs on any free host. An optional U-Net that
 auto-locates the lesion lives on the **`with-ai`** branch (heavier: needs

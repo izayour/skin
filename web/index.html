@@ -45,6 +45,14 @@
   .gitem img { width:100%; border-radius:6px; display:block; }
   .gitem .meta { font-size:11px; color:#bbb; margin-top:4px; line-height:1.35; }
   .gitem .pick { font-size:11px; color:#00e676; font-weight:700; }
+  /* which steps a lineage already carries, so the gallery says why an image is
+     or isn't on offer without opening its checklist */
+  .gitem .tags { margin-top:3px; }
+  .gitem .tag { display:inline-block; font-size:10px; padding:1px 6px; margin:1px 2px 0 0;
+                border-radius:999px; background:#33691e; color:#dcedc8; }
+  .gitem .tag.none { background:#333; color:#9e9e9e; }
+  button.tab { background:#263238; margin-top:0; }
+  button.tab.on { background:#2e7d32; }
   .cmp { display:flex; gap:8px; }
   .cmp > div { flex:1; min-width:0; }
   .cmp img { width:100%; border-radius:8px; display:block; }
@@ -52,6 +60,20 @@
   .delta { margin-top:10px; font-size:14px; line-height:1.7; }
   .delta .big { font-size:19px; font-weight:700; display:block; margin-bottom:4px; }
   .grew { color:#ff8a65; } .shrank { color:#4fc3f7; } .steady { color:#9e9e9e; }
+  .steplist { list-style:none; padding:0; margin:10px 0 0; }
+  .steplist li { display:flex; gap:10px; align-items:flex-start; padding:9px 4px;
+                 border-bottom:1px solid #2a2a2a; font-size:15px; }
+  .steplist li:last-child { border-bottom:0; }
+  .steplist li { align-items:center; }
+  .steplist .tick { flex:0 0 22px; font-size:17px; line-height:1.3; }
+  .steplist .done { color:#00e676; } .steplist .todo { color:#616161; }
+  .steplist .lbl { flex:1; min-width:0; line-height:1.35; }
+  .steplist .sub { display:block; font-size:12px; color:#8a8a8a; margin-top:2px; }
+  /* each finished step keeps its own picture of what it produced -- cropped to
+     the region it annotated, or the outline is a couple of pixels wide */
+  .steplist .nums { display:block; font-size:12px; color:#cfd8dc; margin-top:3px; }
+  .steplist .shot { flex:0 0 78px; }
+  .steplist .shot img { width:78px; border-radius:6px; display:block; cursor:zoom-in; }
   .optline { display:flex; gap:8px; align-items:flex-start; margin-top:10px;
              font-size:13px; color:#bbb; line-height:1.4; }
   .optline input { width:20px; height:20px; flex:0 0 auto; margin:0; }
@@ -75,15 +97,12 @@
   <div id="status" class="card">Loading OpenCV.js…</div>
 
   <section id="stage-capture" class="card hidden">
-    <p class="hint">Take or choose a photo of the lesion, with a ruler sticker in frame.</p>
-    <!-- two inputs: `capture` forces the camera, so gallery access needs an
-         input without it -->
-    <input id="file" type="file" accept="image/*" capture="environment" class="hidden">
-    <input id="filepick" type="file" accept="image/*" class="hidden">
-    <button onclick="document.getElementById('file').click()">Take a photo</button>
-    <button class="secondary" onclick="document.getElementById('filepick').click()">Choose from gallery</button>
-    <button class="secondary" id="demo">Try the demo photo</button>
+    <p class="hint">Pick a processing step. Each one asks which image to run it
+      on, and offers the images it hasn't been run on yet.</p>
+    <button id="go-measure">Measure a lesion</button>
+    <button class="secondary" id="cc-open">Colour calibration</button>
     <button class="secondary" id="compare-open" disabled>Compare over time</button>
+    <button class="secondary" id="lib-open">Image libraries</button>
     <label class="optline"><input type="checkbox" id="genruler-on">
       General ruler — plain mm/cm markings, no colour strip</label>
     <p class="disclaimer">Not a medical device. For demonstration only — does not diagnose.<br>
@@ -178,6 +197,55 @@
     <button id="gen-back" class="danger">Reject — back to lesion</button>
   </section>
 
+  <!-- Choose which image a step runs on. Shows the standard (untouched) image
+       or, once anything has been done to it, the processed result -- and hides
+       whatever this step has already been applied to. -->
+  <section id="stage-pick" class="card hidden">
+    <span class="badge" id="pick-badge">Choose an image</span>
+    <p class="instruct" id="pick-instruct"></p>
+    <!-- two inputs: `capture` forces the camera, so device-gallery access needs
+         an input without it. They live here, next to the buttons that use them. -->
+    <input id="file" type="file" accept="image/*" capture="environment" class="hidden">
+    <input id="filepick" type="file" accept="image/*" class="hidden">
+    <div class="row tight"><button id="pick-cam">Take a photo</button>
+      <button id="pick-file" class="secondary">From device</button>
+      <button id="pick-demo" class="secondary">Demo photo</button></div>
+    <div class="gallery" id="pickgrid"></div>
+    <label class="optline"><input type="checkbox" id="pick-all">
+      Also show images this step has already been applied to</label>
+    <div class="row tight"><button id="pick-go" disabled>Use this image</button>
+      <button id="pick-back" class="secondary">Back</button></div>
+  </section>
+
+  <section id="stage-library" class="card hidden">
+    <div class="row tight"><button id="tab-orig" class="tab">Standard</button>
+      <button id="tab-proc" class="tab">Processed</button></div>
+    <p class="instruct" id="lib-instruct">Pick an image to see what has been done to it.</p>
+    <div class="gallery" id="library"></div>
+    <div class="row tight"><button id="lib-steps" disabled>Steps</button>
+      <button id="lib-del" class="danger" disabled>Delete</button>
+      <button id="lib-back" class="secondary">Back</button></div>
+  </section>
+
+  <section id="stage-steps" class="card hidden">
+    <span class="badge">Processing steps</span>
+    <p class="instruct" id="steps-title"></p>
+    <img id="steps-thumb" alt="" style="width:100%;border-radius:10px;display:block">
+    <p class="hint">Most recent result. Tap any thumbnail below to see that
+      step's own result full screen.</p>
+    <ul class="steplist" id="steps-list"></ul>
+    <button id="steps-back" class="secondary">Back</button>
+  </section>
+
+  <section id="stage-colour" class="card hidden">
+    <span class="badge">Colour calibration</span>
+    <p class="instruct" id="cc-instruct">Looking for the card's colour strips…</p>
+    <canvas id="ccanvas"></canvas>
+    <p class="hint" id="cc-detail"></p>
+    <div class="row tight"><button id="cc-again" class="secondary">Another image</button>
+      <button id="cc-back" class="secondary">Back</button></div>
+  </section>
+
   <section id="stage-gallery" class="card hidden">
     <span class="badge">Compare over time</span>
     <p class="instruct" id="gal-instruct">Pick two saved measurements to compare.</p>
@@ -208,13 +276,15 @@
   <div id="lightbox" class="hidden">
     <img id="lb-img" alt="">
     <div id="lb-cap"></div>
-    <button id="lb-close" class="secondary">Back to comparison</button>
+    <button id="lb-close" class="secondary">Close</button>
   </div>
 </main>
 
-<script src="js/pipeline.js?v=53"></script>
-<script src="js/ruler.js?v=53"></script>
-<script src="js/genruler.js?v=53"></script>
+<script src="js/pipeline.js?v=58"></script>
+<script src="js/ruler.js?v=58"></script>
+<script src="js/genruler.js?v=58"></script>
+<script src="js/skinopus.js?v=58"></script>
+<script src="js/library.js?v=58"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
@@ -233,14 +303,18 @@ const APP_VERSION=(()=>{
   return m?m[1]:"?";
 })();
 $("appver").textContent=`v${APP_RELEASE} (build ${APP_VERSION})`;
-const STAGES=["stage-capture","stage-box","stage-lmanual","stage-review","stage-rulerbox","stage-ticks","stage-blurry","stage-final","stage-genruler","stage-gallery","stage-compare","spinner"];
+const STAGES=["stage-capture","stage-box","stage-lmanual","stage-review","stage-rulerbox","stage-ticks","stage-blurry","stage-final","stage-genruler","stage-colour","stage-pick","stage-library","stage-steps","stage-gallery","stage-compare","spinner"];
 const show=id=>STAGES.forEach(s=>$(s).classList.toggle("hidden",s!==id));
 const defer=fn=>{show("spinner");setTimeout(fn,30);};   // let spinner paint before heavy work
 // The status card sits above every stage, so once loading is done it is a
 // wasted row on a phone -- collapse it, and only bring it back for errors.
 // The version lives on the capture screen instead (see #appver).
 function setStatus(msg){const s=$("status");s.textContent=msg||"";s.classList.toggle("hidden",!msg);}
-function onOpenCvReady(){cvReady=true;setStatus("");show("stage-capture");updateFailUI();updateCompareUI();}
+function onOpenCvReady(){cvReady=true;setStatus("");show("stage-capture");
+  // the pre-2.1 single library lived in localStorage and is superseded by the
+  // originals/processed pair in IndexedDB -- drop it so it isn't holding quota
+  try{ localStorage.removeItem("library"); }catch(e){}
+  updateFailUI();updateCompareUI();libUpdateUI();}
 let imgName="(none)";
 
 // screen -> image pixels. With a view, undo its scale/offset so callers keep
@@ -449,13 +523,99 @@ function setupPinchZoom(canvasId,redraw,onPinchStart){
   return ()=>ptrs.size>=2;
 }
 
-// ---------- load photo ----------
-const onPicked=e=>{if(e.target.files[0]){imgName=e.target.files[0].name;loadFrom(URL.createObjectURL(e.target.files[0]));}};
+// ---------- choosing which image a step runs on ----------------------------
+// Every processing entry point goes through here. The picker is handed the
+// step it is choosing for, and library.js hands back only the lineages that
+// step has not already been applied to. Newly imported images skip the grid
+// entirely -- an image that has just arrived obviously has no steps on it.
+let pickStep=null, pickSel=null, pickThen=null;
+function openPicker(step,title,instruct,then){
+  pickStep=step; pickThen=then; pickSel=null;
+  $("pick-badge").textContent=title;
+  $("pick-instruct").textContent=instruct;
+  $("pick-all").checked=false;
+  show("stage-pick");
+  renderPicker();
+}
+async function renderPicker(){
+  const list=await libCandidates(pickStep,$("pick-all").checked);
+  // an empty grid means two very different things -- nothing imported at all,
+  // or everything imported has had this step already
+  const total=(await libAll("originals")).length;
+  const g=$("pickgrid");
+  if(!list.some(e=>e.id===pickSel)) pickSel=null;
+  g.innerHTML=list.length?"":
+    `<p class="hint">${total===0
+      ? "No images yet — take a photo, add one from your device, or try the demo."
+      : "Every image in the library has already had this step applied. Add a new one, or tick the box below to redo one."}</p>`;
+  list.forEach(r=>{
+    const d=document.createElement("div");
+    d.className="gitem"+(pickSel===r.id?" sel":"");
+    d.innerHTML=`<img src="${r.thumb}" alt="">
+      <div class="meta">${r.name}<br>${fmtDate(r.addedAt)} · ${r.w}×${r.h}
+      <div class="tags">${stepTags(r.steps)}</div>
+      ${pickSel===r.id?'<div class="pick">selected</div>':""}</div>`;
+    d.onclick=()=>{pickSel=(pickSel===r.id?null:r.id);renderPicker();};
+    g.appendChild(d);
+  });
+  $("pick-go").disabled=pickSel===null;
+}
+// the steps a lineage already carries -- "Standard" when it carries none
+function stepTags(steps){
+  const on=LIB_STEPS.filter(s=>steps&&steps[s[0]]);
+  return on.length ? on.map(s=>`<span class="tag">${s[1]}</span>`).join("")
+                   : `<span class="tag none">Standard — unprocessed</span>`;
+}
+$("pick-all").onchange=()=>renderPicker();
+$("pick-back").onclick=()=>show("stage-capture");
+$("pick-go").onclick=()=>{ if(pickSel!==null) usePicked(pickSel); };
+
+// import: straight into the step, since a fresh image can't already have it
+const onPicked=async e=>{
+  const f=e.target.files[0]; if(!f) return;
+  e.target.value="";
+  show("spinner");
+  try{ const rec=await libImport(f,f.name); await usePicked(rec.id); }
+  catch(err){ setStatus("couldn't read that image: "+err); show("stage-pick"); }
+};
 $("file").addEventListener("change",onPicked);
 $("filepick").addEventListener("change",onPicked);
-$("demo").onclick=()=>{imgName="demo:half.jpg";loadFrom("half.jpg");};
-function loadFrom(src){img=new Image();img.onload=()=>{lbox=null;drawImgTo($("canvas"));
-  resetView("canvas");redrawL();$("detect").disabled=true;boxInstruct();show("stage-box");};img.src=src;}
+$("pick-cam").onclick=()=>$("file").click();
+$("pick-file").onclick=()=>$("filepick").click();
+$("pick-demo").onclick=async()=>{
+  show("spinner");
+  try{
+    const b=await (await fetch("half.jpg")).blob();
+    const rec=await libImport(b,"demo:half.jpg");
+    await usePicked(rec.id);
+  }catch(err){ setStatus("couldn't load the demo photo: "+err); show("stage-pick"); }
+};
+
+// Hand the chosen lineage to the step. The pixels come from libWorkBlob, which
+// is the processed working copy when there is one -- so a step applied after
+// colour correction reads the corrected image, never the annotated preview.
+let currentLibId=null;
+async function usePicked(id){
+  show("spinner");
+  const [blob,o]=await Promise.all([libWorkBlob(id),libGet("originals",id)]);
+  if(!blob){ setStatus("that image is no longer in the library"); show("stage-pick"); return; }
+  currentLibId=id; imgName=o?o.name:"(photo)";
+  const im=await libBlobToImage(blob);
+  pickThen(im);
+}
+
+const pickForMeasure=()=>openPicker("area","Measure a lesion",
+  "Choose an image that hasn't been measured yet.",startMeasure);
+const pickForColour=()=>openPicker("colour","Colour calibration",
+  "Choose an image that hasn't been colour calibrated yet.",startColour);
+$("go-measure").onclick=pickForMeasure;
+$("cc-open").onclick=pickForColour;
+
+function startMeasure(im){
+  img=im; lbox=null; lesion=null;
+  drawImgTo($("canvas")); resetView("canvas"); redrawL();
+  $("detect").disabled=true; boxInstruct(); show("stage-box");
+}
 
 // ---------- stage 1: lesion box ----------
 let lbox=null,ldrag=false;
@@ -482,7 +642,7 @@ $("canvas").addEventListener("pointerdown",ev=>{if(boxMulti()){ldrag=false;retur
 $("canvas").addEventListener("pointermove",ev=>{if(boxMulti()){ldrag=false;return;}
   if(!ldrag)return;const[x,y]=pos($("canvas"),ev,lview);lbox[2]=x;lbox[3]=y;redrawL();ev.preventDefault();});
 $("canvas").addEventListener("pointerup",()=>{ldrag=false;if(lbox&&Math.abs(lbox[2]-lbox[0])>10&&Math.abs(lbox[3]-lbox[1])>10)$("detect").disabled=false;boxInstruct();});
-$("rebox").onclick=()=>{$("file").value="";$("filepick").value="";show("stage-capture");};
+$("rebox").onclick=pickForMeasure;
 $("detect").onclick=()=>defer(()=>{
   const src=cleanSrc();
   const box=clampRoi(Math.min(lbox[0],lbox[2]),Math.min(lbox[1],lbox[3]),
@@ -590,7 +750,9 @@ function drawLesion(g,c){g.strokeStyle="#00e676";g.lineWidth=LW(c);g.beginPath()
   g.fillStyle="#ff1744";g.beginPath();g.arc(lesion.centroid[0],lesion.centroid[1],DOT(c),0,7);g.fill();}
 const captureReviewZoom=setupSnapshotZoom("rcanvas");
 function showReview(){const c=$("rcanvas");drawImgTo(c);drawLesion(c.getContext("2d"),c);
-  captureReviewZoom();show("stage-review");}
+  captureReviewZoom();
+  libMark("lesion",renderOf(c,lesion.bbox),{meta:{areaPx:Math.round(lesion.areaPx)}});
+  show("stage-review");}
 $("reject").onclick=()=>{drawImgTo($("canvas"));lbox=null;resetView("canvas");redrawL();
   $("detect").disabled=true;boxInstruct();show("stage-box");};
 // reject straight into tracing: the detector already had its go, so skip the
@@ -760,7 +922,7 @@ function showBlurry(){$("blurry-msg").textContent=
   "The ruler looks too blurry to read automatically. Retaking it in focus is best, "+
   "but you can also box the ruler to try a tighter area, or tap the two 1 cm marks yourself.";
   show("stage-blurry");}
-$("blurry-retake").onclick=()=>{$("file").value="";$("filepick").value="";show("stage-capture");};
+$("blurry-retake").onclick=pickForMeasure;
 $("blurry-tap").onclick=()=>startTicks();
 // Blur is measured on the whole auto-detected ruler region, so a tighter box
 // round just the markings can still be sharp enough to read -- worth offering
@@ -831,6 +993,16 @@ function finalize(p){
     ? `<br><span class="steady">Saved for comparison.</span>`
     : `<br><span class="grew">Couldn't save (storage full).</span>`;
   captureFinalZoom();   // after the thumbnail and crop have been read off it
+  // Reaching here means a scale was established and a size reported. The ruler
+  // shot has to span the lesion AND the two cm markers, which can sit a long
+  // way below it; the area shot is the lesion crop already built above.
+  const mBox=[Math.min(m[0][0],m[1][0]),Math.min(m[0][1],m[1][1]),
+              Math.abs(m[1][0]-m[0][0])||1,Math.abs(m[1][1]-m[0][1])||1];
+  libMark("ruler",renderOf(c,unionBox(lesion.bbox,mBox)),
+          {meta:{pxPerCm:+p.pxPerCm.toFixed(1)}});
+  libMark("area",crop.data,
+          {meta:{areaMm2:+areaMm2.toFixed(1), diaMm:+dia.toFixed(1),
+                 equivDiaMm:+equivDia.toFixed(1), cropMm:crop.mm}});
   show("stage-final");
 }
 
@@ -940,16 +1112,225 @@ $("gal-del").onclick=()=>{
 };
 $("cmp-back").onclick=()=>{renderGallery();show("stage-gallery");};
 
+// ---------- browsing the two libraries ------------------------------------
+// Standard: the images as imported, untouched by any step.
+// Processed: the same images as they stand after every step applied to them.
+// A step's picture has to be readable at gallery size. Scaling a 3000 px photo
+// down to a thumbnail turns a lesion outline into two or three pixels, which is
+// why every step could be ticked and the library still showed nothing. So a
+// render is cropped to the region the step actually annotated, then scaled.
+const RENDER_PX=760;
+function renderOf(c,box){                     // box = [x,y,w,h] in canvas pixels
+  let sx=0,sy=0,sw=c.width,sh=c.height;
+  if(box){
+    // Pad around the annotated region but keep its shape -- squaring the crop
+    // off would blow a wide band like the colour strips back up to the whole
+    // frame, which is the thing making the annotation invisible.
+    sw=box[2]*1.9; sh=box[3]*1.9;
+    const minSide=Math.max(sw,sh)*0.35;         // context on a very thin band
+    sw=Math.max(sw,minSide); sh=Math.max(sh,minSide);
+    sx=box[0]+box[2]/2-sw/2; sy=box[1]+box[3]/2-sh/2;
+  }
+  const s=Math.min(1,RENDER_PX/Math.max(sw,sh));
+  const t=document.createElement("canvas");
+  t.width=Math.max(1,Math.round(sw*s)); t.height=Math.max(1,Math.round(sh*s));
+  const g=t.getContext("2d");
+  g.fillStyle="#000"; g.fillRect(0,0,t.width,t.height);   // pad if the crop overruns an edge
+  g.drawImage(c,sx,sy,sw,sh,0,0,t.width,t.height);
+  return t.toDataURL("image/jpeg",0.78);
+}
+// smallest box containing all of them, so a crop can cover the lesion AND the
+// cm markers even when the ruler sits well below the lesion
+function unionBox(...bs){
+  const x=Math.min(...bs.map(b=>b[0])), y=Math.min(...bs.map(b=>b[1]));
+  return [x,y,Math.max(...bs.map(b=>b[0]+b[2]))-x,Math.max(...bs.map(b=>b[1]+b[3]))-y];
+}
+// Record a completed step against whichever lineage is being worked on.
+// `render` is that step's picture; `extra` carries its numbers as meta, and can
+// also carry a `work` Blob once a step actually rewrites pixels (colour
+// correction will), so later steps read the corrected image, not the annotated.
+function libMark(step,render,extra){
+  if(currentLibId===null) return;
+  const opts=Object.assign({},extra);
+  if(render) opts.render=render;
+  libMarkStep(currentLibId,step,opts).then(libUpdateUI).catch(e=>setStatus("library: "+e));
+}
+// the numbers a finished step produced, for the checklist
+function stepNums(k,m){
+  m=m||{};
+  if(k==="colour"&&m.strips)  return `${m.strips} strip(s) · ${m.swatches} swatches`;
+  if(k==="lesion"&&m.areaPx)  return `${m.areaPx.toLocaleString()} px enclosed`;
+  if(k==="ruler"&&m.pxPerCm)  return `${m.pxPerCm} px/cm`;
+  if(k==="area"&&m.diaMm)     return `${m.diaMm} mm widest · ${m.areaMm2} mm²`;
+  return "";
+}
+async function libUpdateUI(){
+  const [os,ps]=await Promise.all([libAll("originals"),libAll("processed")]);
+  $("lib-open").textContent = os.length
+    ? `Image libraries — ${os.length} standard, ${ps.length} processed`
+    : "Image libraries — empty";
+}
+
+let libSel=null, libTab="proc";
+async function renderLibrary(){
+  const store=libTab==="orig"?"originals":"processed";
+  const list=(await libAll(store)).sort((a,b)=>new Date(b.addedAt)-new Date(a.addedAt));
+  $("tab-orig").classList.toggle("on",libTab==="orig");
+  $("tab-proc").classList.toggle("on",libTab==="proc");
+  const g=$("library");
+  if(!list.some(r=>r.id===libSel)) libSel=null;
+  g.innerHTML=list.length?"":`<p class="hint">${libTab==="orig"
+    ? "No images imported yet."
+    : "Nothing processed yet — run a step on an image and its result appears here."}</p>`;
+  list.forEach(r=>{
+    const d=document.createElement("div");
+    d.className="gitem"+(libSel===r.id?" sel":"");
+    d.innerHTML=`<img src="${libTab==="orig"?r.thumb:r.preview}" alt="">
+      <div class="meta">${r.name}<br>${fmtDate(r.addedAt)} · ${r.w}×${r.h}
+      ${libTab==="orig"?"" :`<div class="tags">${stepTags(r.steps)}</div>`}
+      ${libSel===r.id?'<div class="pick">selected</div>':""}</div>`;
+    d.onclick=()=>{libSel=(libSel===r.id?null:r.id);renderLibrary();};
+    g.appendChild(d);
+  });
+  $("lib-steps").disabled=libSel===null||libTab==="orig";
+  $("lib-steps").classList.toggle("hidden",libTab==="orig");
+  $("lib-del").disabled=libSel===null;
+  $("lib-del").textContent=libTab==="orig"?"Delete":"Undo processing";
+  $("lib-instruct").textContent = libTab==="orig"
+    ? "The images as imported. Nothing here is ever altered by a processing step."
+    : (libSel===null ? "Each image as it stands after every step applied to it."
+                     : "Tap Steps to see what was done to this image.");
+}
+$("tab-orig").onclick=()=>{libTab="orig";libSel=null;renderLibrary();};
+$("tab-proc").onclick=()=>{libTab="proc";libSel=null;renderLibrary();};
+$("lib-open").onclick=()=>{libSel=null;renderLibrary();show("stage-library");};
+$("lib-back").onclick=()=>show("stage-capture");
+// In Standard the whole lineage goes; in Processed only the steps go, putting
+// the original back on offer everywhere.
+$("lib-del").onclick=async()=>{
+  if(libSel===null) return;
+  const whole=libTab==="orig";
+  if(!confirm(whole
+      ? "Delete this image and everything processed from it? This can't be undone."
+      : "Discard every processing step on this image? The original is kept.")) return;
+  await libForget(libSel,!whole);
+  if(currentLibId===libSel) currentLibId=null;
+  libSel=null; renderLibrary(); libUpdateUI();
+};
+// Each finished step shows its own picture and its own numbers -- ticks alone
+// said the work had happened without ever showing the result of it.
+let stepsRec=null;
+$("lib-steps").onclick=async()=>{
+  const r=await libGet("processed",libSel);
+  if(!r) return;
+  stepsRec=r;
+  $("steps-title").textContent=`${r.name} · ${fmtDate(r.addedAt)} · ${r.w}×${r.h}`;
+  $("steps-thumb").src=r.preview;
+  const renders=r.renders||{};
+  $("steps-list").innerHTML=LIB_STEPS.map(([k,label,sub])=>{
+    const at=r.steps[k], shot=renders[k], nums=stepNums(k,r.meta);
+    return `<li><span class="tick ${at?"done":"todo"}">${at?"✓":"○"}</span>`
+         + `<span class="lbl">${label}<span class="sub">${sub}`
+         + `${at?` · ${fmtDate(at)}`:""}</span>`
+         + `${nums?`<span class="nums">${nums}</span>`:""}</span>`
+         + `${shot?`<span class="shot"><img src="${shot}" alt="" data-step="${k}"></span>`:""}`
+         + `</li>`;
+  }).join("");
+  [...$("steps-list").querySelectorAll("img")].forEach(el=>{
+    el.onclick=()=>{
+      const [k,label]=LIB_STEPS.find(s=>s[0]===el.dataset.step);
+      openImage(el.src,`<b>${label}</b> · ${stepsRec.name}`
+        +(stepNums(k,stepsRec.meta)?`<br>${stepNums(k,stepsRec.meta)}`:""));
+    };
+  });
+  show("stage-steps");
+};
+$("steps-back").onclick=()=>{renderLibrary();show("stage-library");};
+
+// ---------- colour calibration (stage 1: find the strips) ----------
+// Detection only for now. The correction maths is meaningless unless these
+// swatches are right, so this screen exists to check them: the reference
+// reports 9+10 on half.jpg and 18+18 on l1-cropped.jpg and l2.jpg.
+let ccImg=null;
+const captureColourZoom=setupSnapshotZoom("ccanvas");
+$("cc-again").onclick=pickForColour;
+$("cc-back").onclick=()=>show("stage-capture");
+function startColour(im){
+  ccImg=im;
+  $("cc-instruct").textContent="Looking for the card's colour strips…";
+  $("cc-detail").textContent="";
+  show("stage-colour");
+  defer(()=>runColourDetect(imgName));
+}
+function runColourDetect(name){
+  const c=$("ccanvas");
+  c.width=ccImg.naturalWidth; c.height=ccImg.naturalHeight;
+  const g=c.getContext("2d");
+  g.setTransform(1,0,0,1,0,0);
+  g.drawImage(ccImg,0,0);
+  let rgba=null,bgr=null,res=null,err=null;
+  try{
+    rgba=cv.imread(c);
+    bgr=new cv.Mat(); cv.cvtColor(rgba,bgr,cv.COLOR_RGBA2BGR);
+    res=detectColourStrips(bgr);
+  }catch(ex){ err=cvErr(ex); }
+  if(rgba) rgba.delete();
+  if(bgr) bgr.delete();
+  if(res&&res.flat) res.flat.delete();
+  const d=window.__cbDiag||{};
+  if(err||!res||!res.strips.length){
+    $("cc-instruct").textContent="No colour strips found in this photo.";
+    $("cc-detail").textContent=err?("error: "+err)
+      :((d.reason||"")+`  [seeds ${d.seeds||0} at chroma ${d.thr||0}, `
+        +`axis inliers ${d.inliers||0}, candidate bands ${d.candidates||0}]`);
+    captureColourZoom(); show("stage-colour"); return;
+  }
+  // draw each strip's swatch outlines so the detection can be judged
+  const cols=["#ffe000","#00aaff","#00ff80"];
+  const lw=Math.max(2,Math.round(c.width/500));
+  res.strips.forEach((st,si)=>{
+    g.strokeStyle=cols[si%cols.length]; g.lineWidth=lw;
+    st.polys.forEach(p=>{
+      g.beginPath();
+      p.forEach((pt,i)=>i?g.lineTo(pt[0],pt[1]):g.moveTo(pt[0],pt[1]));
+      g.closePath(); g.stroke();
+    });
+  });
+  $("cc-instruct").textContent=
+    `Found ${res.strips.length} strip${res.strips.length===1?"":"s"}: `
+    +res.strips.map(s=>s.segs.length+" swatches").join(" + ");
+  $("cc-detail").textContent=
+    `${name} · ${c.width}×${c.height} · seeds ${d.seeds} at chroma ${d.thr}, `
+    +`axis inliers ${d.inliers}, candidate bands ${d.candidates}. `
+    +`Colour correction is not applied yet — this screen checks the swatches first.`;
+  // Marks the lineage colour-calibrated, which takes it out of this step's
+  // picker. No `work` blob yet: the correction maths is not applied, so the
+  // pixels later steps read are still the original's. Crop to the strips
+  // themselves: at whole-frame scale the swatch outlines are a pixel wide.
+  let mnx=1e9,mny=1e9,mxx=-1e9,mxy=-1e9;
+  res.strips.forEach(st=>st.polys.forEach(pl=>pl.forEach(pt=>{
+    mnx=Math.min(mnx,pt[0]); mny=Math.min(mny,pt[1]);
+    mxx=Math.max(mxx,pt[0]); mxy=Math.max(mxy,pt[1]);})));
+  libMark("colour",renderOf(c,mxx>mnx?[mnx,mny,mxx-mnx,mxy-mny]:null),
+          {meta:{strips:res.strips.length,
+                 swatches:res.strips.map(s=>s.segs.length).join("+")}});
+  captureColourZoom();
+  show("stage-colour");
+}
+
 // ---------- full-screen view of one comparison photo ----------
 // Three ways out, because a full-screen overlay with no obvious exit is a
 // trap on a phone: the button, tapping the backdrop, or Escape.
-function openLightbox(rec,when){
-  $("lb-img").src=rec.crop||rec.img;
-  $("lb-cap").innerHTML=`<b>${when}</b> · ${fmtDate(rec.t)}<br>`+
-    `${rec.diaMm} mm · ${rec.areaMm2} mm²`+
-    (rec.cropMm?`<br><span class="hint">${rec.cropMm} mm of skin across</span>`
-               :`<br><span class="grew">whole photo (saved by an older version)</span>`);
+function openImage(src,capHtml){
+  $("lb-img").src=src;
+  $("lb-cap").innerHTML=capHtml;
   $("lightbox").classList.remove("hidden");
+}
+function openLightbox(rec,when){
+  openImage(rec.crop||rec.img,
+    `<b>${when}</b> · ${fmtDate(rec.t)}<br>${rec.diaMm} mm · ${rec.areaMm2} mm²`+
+    (rec.cropMm?`<br><span class="hint">${rec.cropMm} mm of skin across</span>`
+               :`<br><span class="grew">whole photo (saved by an older version)</span>`));
 }
 function closeLightbox(){ $("lightbox").classList.add("hidden"); $("lb-img").src=""; }
 $("lb-close").onclick=closeLightbox;
@@ -1016,8 +1397,7 @@ $("gal-go").onclick=()=>{
 };
 function tickCenter(t){const xs=t.corners.map(p=>p[0]),ys=t.corners.map(p=>p[1]);
   return [xs.reduce((s,v)=>s+v,0)/xs.length, ys.reduce((s,v)=>s+v,0)/ys.length];}
-$("restart").onclick=()=>{lastSavedId=null;$("file").value="";$("filepick").value="";
-  updateCompareUI();show("stage-capture");};
+$("restart").onclick=()=>{lastSavedId=null;updateCompareUI();pickForMeasure();};
 // Reject the finished measurement: drop the record it just saved, keep the
 // approved lesion outline, and go back to calibrating the scale.
 $("redo-scale").onclick=()=>{
