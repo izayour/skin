@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ruler pairing — ground-truth test</title>
+<style>
+  body{background:#0f1216;color:#e8edf3;font:13px/1.5 ui-monospace,Consolas,monospace;margin:16px}
+  pre{white-space:pre-wrap} canvas{border:1px solid #2a323c;margin:6px 6px 0 0;max-width:46%}
+  .ok{color:#3ddc97} .bad{color:#ff6b5e} h1{font-size:15px}
+</style>
+</head>
+<body>
+<h1>Ruler pairing — ground-truth test</h1>
+<p>A synthetic wide shot is built from the close-up by a <b>known</b> homography, so the
+answer is known in advance. Deliberately included: a large bright rectangle standing in for the
+sunlit doorway that <code>detectRuler</code>'s pooled contours would otherwise swallow.</p>
+<pre id="out">running…</pre>
+<div id="cvs"></div>
+
+<script src="./js/pipeline.js"></script>
+<script src="./js/ruler.js"></script>
+<script>
+  window.__cvReady = null;
+  window.__cvP = new Promise(r => { window.__cvReady = r; });
+</script>
+<script async src="../vendor/opencv.js"
+        onload="if(cv.getBuildInformation){window.__cvReady()}else{cv['onRuntimeInitialized']=window.__cvReady}"></script>
+<script type="module">
+import {matFromImage, canonicalise, findCardInRois, associate,
+        homography, mapPoint, scaleAt} from "./js/pair.js?v=14";
+
+const out=document.getElementById("out");
+const log=(s)=>{ out.textContent += s+"\n"; };
+const show=(mat,label)=>{
+  const c=document.createElement("canvas"); c.id="c_"+label;
+  document.getElementById("cvs").appendChild(c); cv.imshow(c,mat);
+};
+
+// The known map: the close-up rectangle placed small, rotated and tilted inside
+// a bigger frame -- what stepping back and not holding the phone square does.
+const WIDE_W=1500, WIDE_H=1100;
+const DEST=[[430,560],[980,520],[1010,770],[400,810]];
+
+(async()=>{
+  try{
+    out.textContent="";
+    await window.__cvP;
+    log("opencv ready");
+
+    const img=new Image();
+    await new Promise((r,j)=>{img.onload=r;img.onerror=j;img.src="./test/half.jpg";});
+    let close=matFromImage(img);
+
+    // Downscale: the geometry under test is scale-free, and a 2.7 MB photo
+    // spends the whole budget in morphology before proving anything.
+    const S=1100/close.cols;
+    const small=new cv.Mat();
+    cv.resize(close,small,new cv.Size(Math.round(close.cols*S),Math.round(close.rows*S)),0,0,cv.INTER_AREA);
+    close.delete(); close=small;
+    log(`close-up ${close.cols}x${close.rows}`);
+
+    // ---- 1. the ruler in the close-up
+    // The ROI a caller would supply. In the app this is belowLesionRoi from the
+    // lesion box; here the lower half of the frame, which is where the ruler is
+    // laid in every one of these test photos.
+    let t=performance.now();
+    const closeRoi={id:"lower half", x:0, y:Math.round(close.rows*0.45),
+                    w:close.cols, h:close.rows-Math.round(close.rows*0.45)};
+    const rc=findCardInRois(close,[closeRoi]);
+    log(`findCardInRois(close): ${rc?"found":"NOT FOUND"}  ${Math.round(performance.now()-t)}ms`);
+    log("  rois: "+JSON.stringify((window.__pairDiag||{}).rois));
+    if(!rc) throw new Error("no ruler in the close-up — nothing to test");
+    const px=(rc.cmTicks&&rc.cmTicks.length>1)?twoCmTicksNear(rc.cmTicks,close.cols/2):null;
+    log(`  ticks ${rc.ticks}   px/cm ${px?px.pxPerCm.toFixed(2):"n/a"}`);
+    const cc=canonicalise(close,rc.corners);
+    log(`  swatch contrast ${cc.contrast.toFixed(3)} (satTop ${cc.satTop.toFixed(1)} / satBot ${cc.satBot.toFixed(1)}) sure=${cc.sure}`);
+    log(`  corners raw   ${JSON.stringify(rc.corners.map(p=>p.map(Math.round)))}`);
+    log(`  corners canon ${JSON.stringify(cc.corners.map(p=>p.map(Math.round)))}`);
+
+    // ---- 2. synthesise the wide shot through a KNOWN homography
+    // The backdrop is a REAL photo -- one of the BodyTrack snapshots, a person
+    // in a room with a sunlit doorway. An earlier version of this test used a
+    // flat neutral-grey field, which is uniquely hostile to paperness (every
+    // pixel of it reads as paper) and unlike any photograph anyone will take.
+    // Several rounds of "fixes" were chasing that artefact.
+    const bg=new Image();
+    await new Promise((r,j)=>{bg.onload=r;bg.onerror=j;bg.src="./test/wide1.jpg";});
+    const bgm=matFromImage(bg);
+    const wide=new cv.Mat();
+    cv.resize(bgm,wide,new cv.Size(WIDE_W,WIDE_H),0,0,cv.INTER_LINEAR);
+    bgm.delete();
+    const Hm=cv.matFromArray(3,3,cv.CV_64F,
+      homography([[0,0],[close.cols-1,0],[close.cols-1,close.rows-1],[0,close.rows-1]],DEST));
+    // BORDER_TRANSPARENT keeps whatever is already in `wide` outside the quad
+    cv.warpPerspective(close,wide,Hm,new cv.Size(WIDE_W,WIDE_H),
+                       cv.INTER_LINEAR,cv.BORDER_TRANSPARENT);
+    Hm.delete();
+    const Htrue=homography([[0,0],[close.cols-1,0],[close.cols-1,close.rows-1],[0,close.rows-1]],DEST);
+    log(`wide shot ${wide.cols}x${wide.rows} on a real room backdrop`);
+
+    // ---- 3. can the card be found among the distractors?
+    // Stand-in for limbRois(): a loose box around the body, deliberately much
+    // bigger than the card and containing plenty of skin, as a real limb box
+    // would be. The distractor sits outside it -- which is the point.
+    const bodyRoi={id:"limb", x:350, y:470, w:730, h:400};
+    t=performance.now();
+    const found=findCardInRois(wide,[bodyRoi]);
+    log(`findCardInRois(wide): ${found?"found":"NOT FOUND"}  ${Math.round(performance.now()-t)}ms`);
+    log("  rois: "+JSON.stringify((window.__pairDiag||{}).rois));
+
+    // Replicate detectRuler's innards on that box -- its helpers are globals --
+    // so a null answer says WHICH stage dropped the card rather than just that
+    // it was dropped.
+    {
+      const rect=new cv.Rect(bodyRoi.x,bodyRoi.y,bodyRoi.w,bodyRoi.h);
+      const cT=wide.roi(rect), crop=cT.clone(); cT.delete();
+      const rgb=new cv.Mat(); cv.cvtColor(crop,rgb,cv.COLOR_RGBA2RGB);
+      const den=new cv.Mat(); cv.bilateralFilter(rgb,den,9,75,75,cv.BORDER_DEFAULT);
+      const pap=paperness(den);
+      const ot=new cv.Mat();
+      const thr=cv.threshold(pap,ot,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU);
+      const fg=cv.countNonZero(ot)/(ot.rows*ot.cols);
+      log(`  [inner] otsu threshold ${thr.toFixed(1)}, foreground ${(fg*100).toFixed(1)}% of box`);
+      for(const ks of [25,13,7]){
+        const cl=cleanRuler(ot,ks|1);
+        const cs=new cv.MatVector(), hi=new cv.Mat();
+        cv.findContours(cl,cs,hi,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+        const rows=[];
+        for(let i=0;i<cs.size();i++){
+          const c=cs.get(i), a=cv.contourArea(c), rr=cv.minAreaRect(c);
+          const ra=rr.size.width*rr.size.height;
+          rows.push({area:Math.round(a), frac:+(a/(bodyRoi.w*bodyRoi.h)).toFixed(4),
+                     rect:+(ra>0?a/ra:0).toFixed(2),
+                     wh:[Math.round(rr.size.width),Math.round(rr.size.height)]});
+          c.delete();
+        }
+        rows.sort((x,y)=>y.area-x.area);
+        log(`  [inner] ks=${ks}: ${cs.size()} contours  `+JSON.stringify(rows.slice(0,4)));
+        cs.delete(); hi.delete(); cl.delete();
+      }
+      show(ot,"wideotsu");
+      crop.delete(); rgb.delete(); den.delete(); pap.delete(); ot.delete();
+    }
+
+    // Where the card REALLY is in the wide shot: its close-up corners pushed
+    // through the known map. Comparing against what was detected separates a
+    // wrong quad from a right quad ordered the wrong way round.
+    const truthCard=cc.corners.map(p=>mapPoint(Htrue,p));
+    log("  card truth : "+JSON.stringify(truthCard.map(p=>p.map(Math.round))));
+    if(found){
+      log("  card found : "+JSON.stringify(found.corners.map(p=>p.map(Math.round))));
+      const wcc=canonicalise(wide,found.corners);
+      log("  card canon : "+JSON.stringify(wcc.corners.map(p=>p.map(Math.round)))+
+          `  contrast ${wcc.contrast.toFixed(3)} sure=${wcc.sure}`);
+      const cornerErr=wcc.corners.map((p,i)=>Math.hypot(p[0]-truthCard[i][0],p[1]-truthCard[i][1]));
+      log("  corner err : "+cornerErr.map(v=>v.toFixed(1)).join(", ")+" px");
+      // draw both so a glance says which one is the card
+      const dbg=wide.clone();
+      const poly=(pts,col)=>{for(let i=0;i<4;i++)
+        cv.line(dbg,new cv.Point(pts[i][0],pts[i][1]),
+                    new cv.Point(pts[(i+1)%4][0],pts[(i+1)%4][1]),col,3);};
+      poly(truthCard,new cv.Scalar(0,255,0,255));
+      poly(wcc.corners,new cv.Scalar(255,60,60,255));
+      cv.circle(dbg,new cv.Point(truthCard[0][0],truthCard[0][1]),9,new cv.Scalar(0,255,0,255),-1);
+      cv.circle(dbg,new cv.Point(wcc.corners[0][0],wcc.corners[0][1]),6,new cv.Scalar(255,60,60,255),-1);
+      show(dbg,"debug"); dbg.delete();
+    }
+
+    // ---- 4. end to end, against ground truth
+    const probes=[[close.cols*0.5,close.rows*0.5],
+                  [close.cols*0.30,close.rows*0.35],
+                  [close.cols*0.72,close.rows*0.62]];
+    let worst=0, worstPxPerCm=null;
+    for(const p of probes){
+      const truth=mapPoint(Htrue,p);
+      const res=associate(close,wide,p,{corners:rc.corners, pxPerCm:px?px.pxPerCm:null},[bodyRoi]);
+      if(!res.ok){ log(`  probe ${p.map(Math.round)} -> FAILED: ${res.reason}`); worst=Infinity; continue; }
+      const err=Math.hypot(res.point[0]-truth[0],res.point[1]-truth[1]);
+      worst=Math.max(worst,err); worstPxPerCm=res.pxPerCmWide||worstPxPerCm;
+      log(`  probe ${JSON.stringify(p.map(Math.round))} -> got ${res.point.map(v=>Math.round(v))} `+
+          `truth ${truth.map(v=>Math.round(v))}  err ${err.toFixed(2)} px`+
+          `   scale ${res.scale.toFixed(4)}  px/cm(wide) ${res.pxPerCmWide?res.pxPerCmWide.toFixed(2):"n/a"}`);
+    }
+    // Judged in CENTIMETRES ON SKIN, not pixels. A pixel threshold was tried
+    // first and was simply arbitrary -- pixels mean nothing across photos taken
+    // from different distances. The question this feature answers, which limb
+    // and how far along it, is decided at the scale of a limb's width: 5-10 cm.
+    // Corner noise on a 57-px-tall card sets the floor, and the error grows
+    // with distance from the card, as extrapolation does.
+    const cm = worstPxPerCm ? worst/worstPxPerCm : null;
+    const pass = cm!==null && cm<=1.5;
+    log(`\n${pass?"PASS":"FAIL"} — worst error ${worst.toFixed(1)} px`+
+        (cm!==null?` = ${cm.toFixed(2)} cm on skin (limit 1.5 cm)`:""));
+    out.innerHTML += pass ? '<span class="ok">RESULT: PASS</span>' : '<span class="bad">RESULT: FAIL</span>';
+
+    show(close,"close"); show(wide,"wide");
+    close.delete(); wide.delete();
+  }catch(e){
+    log("ERROR: "+(e&&e.message||e));
+    out.innerHTML += '<span class="bad">RESULT: ERROR</span>';
+    console.error(e);
+  }
+})();
+</script>
+</body>
+</html>
