@@ -20,25 +20,36 @@
    Two things differ from the standalone tool, both because this runs inside a
    measurement app rather than as a diagnostic:
 
-   - It is told where the lesion is and REFUSES when the ruler band overlaps
-     it. The Python has no such context and on a small tilted photo (rl3) it
-     locked onto hairs on the mole and reported a confident 101 px/cm against
-     a true ~60 -- a scale error that squares into the area.
+   - It is told where the lesion is, and the lesion is painted out of the frame
+     before any band is looked for, with a REFUSAL still in place if a band
+     lands on it anyway. The Python has no such context and on a small tilted
+     photo (rl3) it locked onto hairs on the mole and reported a confident
+     101 px/cm -- a scale error that squares into the area.
+     (The "true ~60 px/cm" this comment used to quote for rl3 was wrong. The
+     gap between its printed 1 and 2 is ~81 px, and the mm lattice reads 83.)
    - Anything short of a solid fit returns null with a reason, so the caller
      falls back to tapping two marks by hand. A wrong scale is worse than no
      scale here.
 
-   Heavily inclined rulers are out of scope by decision; the skew search spans
-   +/-10 degrees, enough for a hand-held photo that is roughly square-on.
+   Inclined rulers ARE in scope here, unlike the Python: the skew search spans
+   +/-45 degrees in each of the two orientations, so the two sweeps meet and no
+   angle is unreachable. See GEN_SKEW_SPAN.
 */
 
 const GEN_MIN_TICKS = 10;      // fewer than this and the fit is not trusted
 const GEN_WORK_MAX  = 1600;    // longest side analysed
 const GEN_WORK_MIN  = 700;     // below this, upsample: strokes get too short
-const GEN_SKEW_SPAN = 15.0;    // degrees either side of level, as in the Python.
-                               // Heavily inclined rulers are out of scope, but
-                               // narrowing this to 10 moved rl5 by 5.6%, so the
-                               // reference span is kept for parity.
+const GEN_SKEW_SPAN = 45.0;    // degrees either side of level. The Python uses
+                               // 15 and calls inclined rulers out of scope; that
+                               // leaves a dead zone, because the two orientations
+                               // only cover 15 degrees around level and around
+                               // upright. rl3 sits at ~41 degrees, squarely in
+                               // the gap, and was refused outright. At 45 the h
+                               // and v sweeps meet, so every angle is reachable.
+                               // Widening is safe only because a bad angle still
+                               // has to clear GEN_MIN_TICKS, the lattice fit and
+                               // the on-lesion guard; the angle is scored by the
+                               // quality of the tick fit, not by contrast.
 
 // ---- small numeric helpers ------------------------------------------------
 const _med = a => { if (!a.length) return 0;
@@ -451,13 +462,17 @@ function fitProjective(pos) {
 }
 const localPitch = (a, b, c, n) => (a - b * c) / Math.pow(c * n + 1, 2);
 
-// px per minor tick at an image column, in ORIGINAL image pixels
-function pitchAtX(res, x) {
+// px per minor tick at a position ALONG THE RUN OF TICKS, in ORIGINAL image
+// pixels. `pos` is in de-skewed working-frame units -- the same units as
+// tick.pos, which is what the perspective fit was fitted against. It is
+// deliberately not an image x: the tick axis is only image x when the frame is
+// unrotated, unskewed and uncropped.
+function pitchAtPos(res, pos) {
   if (!res || !res.perspective) return res ? res.pxPerTick : 0;
   const { a, b, c } = res.perspective, k = res.workScale;
-  const xw = x * k, den = xw * c - a;
+  const den = pos * c - a;
   if (Math.abs(den) < 1e-9) return res.pxPerTick;
-  return localPitch(a, b, c, (b - xw) / den) / k;
+  return localPitch(a, b, c, (b - pos) / den) / k;
 }
 
 // ---- 7. skew search -------------------------------------------------------
@@ -492,8 +507,30 @@ function _evaluate(ink, angle) {
   return ticks.length * fit * Math.min(1, span / 0.3);
 }
 function _searchAngle(ink) {
+  // The coarse sweep only has to land in the right few degrees, and it does
+  // not need full resolution to do that -- halving each side makes every
+  // evaluation about 4x cheaper, which is what pays for the +/-45 span. The
+  // refinement passes run on the full-size map, where the sub-pixel quality of
+  // the fit is what is actually being compared.
   let bestA = 0, bestQ = -1;
-  for (const [step, rng] of [[2.0, GEN_SKEW_SPAN], [0.4, 2.0], [0.1, 0.5]]) {
+  const half = new cv.Mat();
+  cv.resize(ink, half, new cv.Size(Math.max(32, ink.cols >> 1),
+                                   Math.max(32, ink.rows >> 1)), 0, 0, cv.INTER_AREA);
+  const coarse = src => {
+    let a0 = 0, q0 = -1;
+    for (let a = -GEN_SKEW_SPAN; a <= GEN_SKEW_SPAN + 1e-9; a += 2.0) {
+      const q = _evaluate(src, a);
+      if (q > q0) { q0 = q; a0 = a; }
+    }
+    return [a0, q0];
+  };
+  [bestA, bestQ] = coarse(half);
+  half.delete();
+  // Ticks can be too fine to survive the downscale. If nothing scored there,
+  // the cheap pass has told us nothing and the full-size sweep has to run.
+  if (bestQ <= 0) [bestA, bestQ] = coarse(ink);
+  bestQ = -1;
+  for (const [step, rng] of [[0.5, 2.5], [0.1, 0.5]]) {
     let cand = bestA;
     for (let a = bestA - rng; a <= bestA + rng + 1e-9; a += step) {
       const q = _evaluate(ink, a);
@@ -546,7 +583,7 @@ function nearLesionRoi(imgW, imgH, bbox, factor) {
 
 /* Detect the ruler and its scale.
    src: full RGBA Mat. roi: {x,y,w,h}. lesionBox: [x,y,w,h] in full-image px.
-   -> { pxPerTick, pxPerCm, marksPerCm, count, ticks, roi, perspective, ... }
+   -> { pxPerTick, pxPerCm, marksPerMajor, majorUnit, count, ticks, roi, ... }
       or null, with the reason in window.__genDiag. */
 function detectGenericRuler(src, roi, lesionBox) {
   const diag = window.__genDiag = { roi: [roi.x, roi.y, roi.w, roi.h],
@@ -567,6 +604,31 @@ function detectGenericRuler(src, roi, lesionBox) {
     cv.resize(full, work, new cv.Size(Math.round(roi.w * up), Math.round(roi.h * up)),
               0, 0, up > 1 ? cv.INTER_CUBIC : cv.INTER_AREA);
     full.delete();
+  }
+
+  // Take the lesion out of the frame before anything goes looking for a band.
+  // The guard further down rejects a band that landed on the lesion, but
+  // rejecting is too late: on a small crop the mole's hairs out-score a thin
+  // ruler, the search settles on them, and a photo with a perfectly good ruler
+  // in it gets refused -- rl3 found 6 ticks, all on the mole, and never
+  // examined the ruler at all. Painting the lesion flat leaves no dark marks
+  // there, so both the channel choice above and the band search below have to
+  // look where the ruler actually is. Padded, because hairs and the darker rim
+  // reach past the traced outline.
+  if (lesionBox) {
+    const pad = 0.18;
+    const lx = (lesionBox[0] - roi.x) * up, ly = (lesionBox[1] - roi.y) * up;
+    const lw = lesionBox[2] * up, lh = lesionBox[3] * up;
+    const x0 = Math.max(0, Math.round(lx - lw * pad));
+    const y0 = Math.max(0, Math.round(ly - lh * pad));
+    const x1 = Math.min(work.cols, Math.round(lx + lw * (1 + pad)));
+    const y1 = Math.min(work.rows, Math.round(ly + lh * (1 + pad)));
+    if (x1 - x0 > 1 && y1 - y0 > 1) {
+      const m = cv.mean(work);
+      cv.rectangle(work, new cv.Point(x0, y0), new cv.Point(x1, y1),
+                   new cv.Scalar(m[0], m[1], m[2], 255), -1);
+      diag.lesionMasked = [x0, y0, x1 - x0, y1 - y0];
+    }
   }
 
   const gray0 = inkChannel(work);
@@ -622,34 +684,7 @@ function detectGenericRuler(src, roi, lesionBox) {
     return null;
   }
 
-  // GUARD: the band must not sit on the lesion. Without this the detector will
-  // happily fit a lattice to hairs on a mole and report a confident scale --
-  // measured at 101 px/cm against a true ~60 on a small tilted photo.
-  if (lesionBox) {
-    // the band runs across the analysed frame; in "v" that frame is the crop
-    // turned 90 degrees, so the band spans image X rather than image Y
-    let by0, by1, ly0, ly1;
-    if (orientation === "h") {
-      by0 = roi.y + band[0] / up; by1 = roi.y + band[1] / up;
-      ly0 = lesionBox[1]; ly1 = lesionBox[1] + lesionBox[3];
-    } else {
-      by0 = roi.x + (work.rows - band[1]) / up;
-      by1 = roi.x + (work.rows - band[0]) / up;
-      ly0 = lesionBox[0]; ly1 = lesionBox[0] + lesionBox[2];
-    }
-    const overlap = Math.max(0, Math.min(by1, ly1) - Math.max(by0, ly0));
-    const frac = overlap / Math.max(1, by1 - by0);
-    if (frac > 0.5) {
-      cleanup();
-      diag.stage = "onlesion";
-      diag.reason = `The marks that were found sit on the lesion, not on a ruler `
-                  + `(${Math.round(frac * 100)}% overlap), so the scale would be wrong. `
-                  + `Make sure the ruler is in the photo beside the lesion.`;
-      return null;
-    }
-  }
-
-  classifyTicks(ticks);
+  const [majorPeriod] = classifyTicks(ticks);
   const pos = ticks.map(t => t.pos);
   let [pitch, rmsLin] = robustPitch(pos);
   let rms = rmsLin, persp = null;
@@ -672,30 +707,71 @@ function detectGenericRuler(src, roi, lesionBox) {
     return null;
   }
 
+  // How many minor divisions make a major. classifyTicks has already decided
+  // this: its period is counted in lattice indices, so it IS the answer, and
+  // it is counted over every tick the comb should have rather than over the
+  // ones that survived.
+  //
+  // Measuring the majors' own spacing and dividing by the pitch is the same
+  // number only while the comb is complete. Let a stretch of ticks go missing
+  // and the surviving majors are the pair either side of the hole: on rl3 the
+  // lesion mask paints out the middle of the ruler, indices 8..16 disappear,
+  // and the two majors left read 20 minors apart where the period is 10.
+  // Twenty is in no MINOR table, so a photo whose scale was measured correctly
+  // (8.34 px/tick either way) was sent to the "millimetres or centimetres?"
+  // prompt for want of a name.
   const majors = ticks.filter(t => t.level === 2).map(t => t.pos);
-  let pxPerMajor = 0;
-  if (majors.length >= 2) pxPerMajor = robustPitch(majors)[0];
-  let minorPerMajor = null;
-  if (pxPerMajor > 0 && pitch > 0) minorPerMajor = Math.round(pxPerMajor / pitch);
+  let minorPerMajor = majorPeriod || null;
+  if (!minorPerMajor && majors.length >= 2) {   // no period found: fall back
+    const pxPerMajor = robustPitch(majors)[0];  // to the spacing of the majors
+    if (pxPerMajor > 0 && pitch > 0) minorPerMajor = Math.round(pxPerMajor / pitch);
+  }
   diag.minorPerMajor = minorPerMajor;
 
-  // A detected major period is NOT necessarily a centimetre. On rl1 the long
-  // marks repeat every 5 minor ticks -- those are the half-centimetre marks,
-  // whose height matches the cm marks closely enough that the sub-lattice
-  // search settles on 5. Treating "major" as "centimetre" there halved the
-  // scale (118.97 vs a true 237.9), and a 2x scale error is a 4x area error.
+  // The period says what the MINOR division is; that is the reading to trust,
+  // not "the long mark is a centimetre". A long mark is whatever the ruler's
+  // maker chose to emphasise, but the small division between marks is one of
+  // a very short list of real things.
   //
-  // Only period 10 is claimed without asking: long marks every 10th division
-  // on an otherwise uniform comb is the millimetre ruler everyone owns.
-  // Anything else goes to the caller's mm/cm confirmation instead of guessing.
-  const unitConfident = minorPerMajor === 10;
+  //   10 -> minor is a millimetre, long mark on the centimetre. The ruler
+  //         everyone owns.
+  //    5 -> minor is STILL a millimetre; the long mark is the half-centimetre.
+  //         A rule divided into five 2 mm steps per centimetre barely exists,
+  //         so 5 names the half-cm, not a centimetre. This is rl1, where
+  //         calling the major a centimetre halved the scale to 118.97 against
+  //         a true 237.9 -- and a 2x scale error is a 4x area error. Reading
+  //         the minor instead gives 23.80 x 10 = 238.0, right on the nose.
+  //  8/16 -> minor is an eighth or sixteenth of an inch, long mark on the
+  //         inch. No metric rule puts a long mark every 8th or 16th. This is
+  //         the dual-scale dermatology card, whose INCH edge the band search
+  //         can settle on: period 8 used to reach a "1 mm or 1 cm?" prompt
+  //         where NEITHER answer was true. As inches it reads 237.7 px/cm on
+  //         l1-cropped against 234 from the card detector, 1.6% apart.
+  //
+  // Anything else still goes to the caller's confirmation rather than a guess.
+  const MINOR = {
+    5:  { cm: 0.1,        name: "millimetres",      major: "½ cm" },
+    10: { cm: 0.1,        name: "millimetres",      major: "cm"        },
+    8:  { cm: 2.54 / 8,   name: "eighth-inches",    major: "inch"      },
+    16: { cm: 2.54 / 16,  name: "sixteenth-inches", major: "inch"      }
+  };
+  const minor = MINOR[minorPerMajor] || null;
+  const unitConfident = minor !== null;
 
   // tick positions back to full-image coordinates. The band is horizontal in
   // the de-skewed frame; undo the rotation about the working centre.
   // tick positions back to full-image pixels: undo the skew rotation about the
   // analysed frame's centre, then the 90-degree turn if the frame was rotated
+  // The skew was applied by _rotateMat(ink0, angle); undoing it means rotating
+  // the point by +angle here, not -angle. The sign was wrong, and invisibly so:
+  // at 0 degrees the two agree, and even at the old +/-15 cap the drawn ticks
+  // were only slightly off. It also never moved the reported scale, which comes
+  // from the pitch measured in the de-skewed frame. What it did move was the
+  // overlay and the on-lesion guard -- at rl3's -42 degrees the mapped ticks
+  // came out on a line roughly perpendicular to the ruler, straight across the
+  // mole.
   const cxw = gray.cols / 2, cyw = gray.rows / 2;
-  const rad = -angle * Math.PI / 180, cs = Math.cos(rad), sn = Math.sin(rad);
+  const rad = angle * Math.PI / 180, cs = Math.cos(rad), sn = Math.sin(rad);
   const bandMid = (band[0] + band[1]) / 2;
   const cropH = work.rows;
   const full_ticks = ticks.map(t => {
@@ -707,13 +783,42 @@ function detectGenericRuler(src, roi, lesionBox) {
     return [roi.x + cropX / up, roi.y + cropY / up];
   });
   const workScale = up;
+
+  // GUARD: the marks must not sit on the lesion. Without this the detector will
+  // happily fit a lattice to hairs on a mole and report a confident scale --
+  // 101 px/cm on rl3, where the ruler reads 83.
+  //
+  // Tested on the mapped tick positions, not on the band. The band is a strip
+  // in the DE-SKEWED frame, so comparing it to an axis-aligned lesion box
+  // quietly assumes the skew is small; at rl3's -42 degrees that assumption
+  // inverts the answer, and a ruler correctly found off to the side was thrown
+  // out for "64% overlap" with a lesion it never touched. These coordinates are
+  // already back in the image, so they need no assumption at all.
+  if (lesionBox && full_ticks.length) {
+    const [lx, ly, lw, lh] = lesionBox;
+    let on = 0;
+    for (const [tx, ty] of full_ticks)
+      if (tx >= lx && tx <= lx + lw && ty >= ly && ty <= ly + lh) on++;
+    const frac = on / full_ticks.length;
+    if (frac > 0.5) {
+      cleanup();
+      diag.stage = "onlesion";
+      diag.onLesionFrac = +frac.toFixed(2);
+      diag.reason = `The marks that were found sit on the lesion, not on a ruler `
+                  + `(${Math.round(frac * 100)}% of them), so the scale would be wrong. `
+                  + `Make sure the ruler is in the photo beside the lesion.`;
+      return null;
+    }
+  }
   cleanup();
 
   const out = {
     pxPerTick: pitch / up,
-    marksPerCm: unitConfident ? minorPerMajor : null,
+    marksPerMajor: unitConfident ? minorPerMajor : null,
+    majorUnit: unitConfident ? minor.major : null,   // what a long mark spans
+    minorName: unitConfident ? minor.name : null,    // what one small step is
     minorPerMajor,                       // what the sub-lattice actually found
-    pxPerCm: unitConfident ? (pitch * minorPerMajor) / up : null,
+    pxPerCm: unitConfident ? (pitch / up) / minor.cm : null,
     unitUnknown: !unitConfident,
     count: ticks.length,
     rms: rms / up,
@@ -724,18 +829,30 @@ function detectGenericRuler(src, roi, lesionBox) {
   };
   diag.stage = "ok";
   diag.reason = unitConfident
-    ? `${ticks.length} marks, every 10th is a long one, so 10 marks = 1 cm.`
+    ? `${ticks.length} marks, every ${minorPerMajor}th a long one (1 ${minor.major}), `
+      + `so the small marks are ${minor.name}.`
     : minorPerMajor
-      ? `${ticks.length} marks at ${(pitch / up).toFixed(2)} px, with a long mark `
-        + `every ${minorPerMajor} — which could be half-centimetres, so the unit needs confirming.`
+      ? `${ticks.length} marks at ${(pitch / up).toFixed(2)} px, with a long mark every `
+        + `${minorPerMajor} — not a spacing that names a unit, so it needs confirming.`
       : `${ticks.length} marks at ${(pitch / up).toFixed(2)} px, but no long/short `
         + `pattern to say how many make a centimetre.`;
   // local scale at the lesion: with perspective the pitch drifts across the
   // frame, and using the global figure biased area by 12% on one test photo
   if (persp && lesionBox) {
-    const lx = lesionBox[0] + lesionBox[2] / 2;
-    const lp = pitchAtX(out, lx);
-    if (lp > 0 && minorPerMajor) out.pxPerCmAtLesion = lp * minorPerMajor;
+    // Where the lesion falls along the run of ticks -- the only axis the
+    // perspective fit is a function of. Reaching it means the trip the ticks
+    // made, in reverse: image -> crop -> orientation -> de-skew. The previous
+    // code passed the lesion's image x scaled by workScale, which quietly
+    // assumed an unrotated, unskewed, un-offset frame. On rl3 ("v", -42
+    // degrees) that is not even the right axis, and this number is what the
+    // final measurement gets calibrated with.
+    const lcx = (lesionBox[0] + lesionBox[2] / 2 - roi.x) * up;
+    const lcy = (lesionBox[1] + lesionBox[3] / 2 - roi.y) * up;
+    const LX = orientation === "h" ? lcx : (cropH - 1 - lcy);
+    const LY = orientation === "h" ? lcy : lcx;
+    const lpos = cxw + (LX - cxw) * cs + (LY - cyw) * sn;
+    const lp = pitchAtPos(out, lpos);
+    if (lp > 0 && unitConfident) out.pxPerCmAtLesion = lp / minor.cm;
     out.pxPerTickAtLesion = lp;
   }
   return out;

@@ -100,11 +100,11 @@
     <p class="hint">Pick a processing step. Each one asks which image to run it
       on, and offers the images it hasn't been run on yet.</p>
     <button id="go-measure">Measure a lesion</button>
-    <button class="secondary" id="cc-open">Colour calibration</button>
+    <!-- Hidden for the 3.0 line. The colour-calibration code below is left
+         intact, so dropping the hidden class brings the step straight back. -->
+    <button class="secondary hidden" id="cc-open">Colour calibration</button>
     <button class="secondary" id="compare-open" disabled>Compare over time</button>
     <button class="secondary" id="lib-open">Image libraries</button>
-    <label class="optline"><input type="checkbox" id="genruler-on">
-      General ruler — plain mm/cm markings, no colour strip</label>
     <p class="disclaimer">Not a medical device. For demonstration only — does not diagnose.<br>
       <span id="appver">Version …</span></p>
     <div id="faillog-row" class="hidden" style="margin-top:10px">
@@ -154,7 +154,7 @@
   <section id="stage-rulerbox" class="card hidden">
     <span class="badge">2 · Draw a box around the ruler</span>
     <canvas id="rulercanvas"></canvas>
-    <p class="hint">Couldn't find the ruler automatically — box it, or tap the marks.</p>
+    <p class="hint" id="rulerbox-hint">Couldn't find the ruler automatically — box it, or tap the marks.</p>
     <div class="row tight"><button id="ruler-detect" disabled>Detect ticks</button>
       <button id="ruler-tap" class="secondary">Tap ticks</button>
       <button id="rulerbox-back" class="danger">Back</button></div>
@@ -280,11 +280,11 @@
   </div>
 </main>
 
-<script src="js/pipeline.js?v=60"></script>
-<script src="js/ruler.js?v=60"></script>
-<script src="js/genruler.js?v=60"></script>
-<script src="js/skinopus.js?v=60"></script>
-<script src="js/library.js?v=60"></script>
+<script src="js/pipeline.js?v=70"></script>
+<script src="js/ruler.js?v=70"></script>
+<script src="js/genruler.js?v=70"></script>
+<script src="js/skinopus.js?v=70"></script>
+<script src="js/library.js?v=70"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
@@ -671,7 +671,6 @@ function logRulerFailure(kind){
     log.push({t:new Date().toISOString(), kind:kind||"ruler", img:imgName,
               imgW:img.naturalWidth, imgH:img.naturalHeight,
               lesionBBox:lesion?lesion.bbox.map(Math.round):null,
-              genRuler:$("genruler-on").checked,
               diag:window.__genDiag||null});
     while(log.length>50) log.shift();
     localStorage.setItem("faillog",JSON.stringify(log));
@@ -760,32 +759,35 @@ $("reject").onclick=()=>{drawImgTo($("canvas"));lbox=null;resetView("canvas");re
 $("reject-trace").onclick=()=>{lesion=null;startLManual();};
 $("accept").onclick=()=>defer(()=>{
   const src=cleanSrc();
-  // "General ruler" takes a different route entirely -- see genruler.js
-  if($("genruler-on").checked){
-    const gr=nearLesionRoi(src.cols,src.rows,lesion.bbox);
-    const groi=clampRoi(gr.x,gr.y,gr.w,gr.h,src.cols,src.rows,32);
-    let g=null;
-    // pass the lesion box so the detector can refuse when the marks it found
-    // are on the lesion rather than on a ruler
-    if(groi){ try{g=detectGenericRuler(src,groi,lesion.bbox);}catch(e){setStatus("err "+cvErr(e));} }
-    src.delete();
-    if(g){showGenRuler(g);return;}
-    const d=window.__genDiag;
-    logRulerFailure("general-ruler");
-    startTicks("Automatic detection failed. "+
-      (d&&d.reason ? d.reason : "No evenly spaced ruler marks were found near the lesion.")+
-      " Tap two marks 1 cm apart instead.");
-    return;
-  }
-  const raw=belowLesionRoi(src.cols,src.rows,lesion.bbox);
-  const roi=clampRoi(raw.x,raw.y,raw.w,raw.h,src.cols,src.rows,32);
-  let r=null;
-  if(roi){ try{r=detectRuler(src,roi);}catch(e){setStatus("err "+cvErr(e));} }
-  src.delete();
-  if(r){const p=twoCmTicksNear(r.cmTicks,lesion.centroid[0]);
-    if(p){finalize(p);return;}
-    if(r.sharpness<BLUR_THRESHOLD){showBlurry();return;}}
-  startRulerBox();                       // auto failed -> ask for a ruler box
+  // One ruler path for every kind of ruler -- the app works out which detector
+  // fits instead of asking. The card detector runs first because it reads real
+  // centimetre ticks, so a hit settles the scale outright; the general detector
+  // is the wider net but measures only a pitch, which may still need "mm or
+  // cm?" confirming. Both run against the same src, which is why the decisions
+  // are all made below, after it has been freed exactly once.
+  let r=null,g=null,pair=null;
+  try{
+    const raw=belowLesionRoi(src.cols,src.rows,lesion.bbox);
+    const roi=clampRoi(raw.x,raw.y,raw.w,raw.h,src.cols,src.rows,32);
+    if(roi){ try{r=detectRuler(src,roi);}catch(e){setStatus("err "+cvErr(e));} }
+    if(r) pair=twoCmTicksNear(r.cmTicks,lesion.centroid[0]);
+    if(!pair){
+      const gr=nearLesionRoi(src.cols,src.rows,lesion.bbox);
+      const groi=clampRoi(gr.x,gr.y,gr.w,gr.h,src.cols,src.rows,32);
+      // pass the lesion box so the detector can refuse when the marks it found
+      // are on the lesion rather than on a ruler
+      if(groi){ try{g=detectGenericRuler(src,groi,lesion.bbox);}catch(e){setStatus("err "+cvErr(e));} }
+    }
+  } finally { src.delete(); }
+  if(pair){finalize(pair);return;}
+  if(g){showGenRuler(g);return;}
+  logRulerFailure("ruler-cascade");
+  // Carry the detector's own account on to whichever fallback comes next --
+  // "only 6 ticks on it" is something the user can act on; a bare "couldn't
+  // find the ruler" reads as though the ruler was never looked at.
+  const why=(window.__genDiag&&window.__genDiag.reason)||"";
+  if(r&&r.sharpness<BLUR_THRESHOLD){showBlurry(why);return;}
+  startRulerBox(why);                    // auto failed -> ask for a ruler box
 });
 
 // ---------- general ruler: confirm what the detected spacing means ----------
@@ -802,13 +804,14 @@ function showGenRuler(g){
   ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
   ctx.strokeStyle="#00e676";
   ctx.strokeRect(g.roi.x,g.roi.y,g.roi.w,g.roi.h);
-  const known=!g.unitUnknown&&g.marksPerCm;
+  const known=!g.unitUnknown&&g.marksPerMajor;
   $("gen-instruct").textContent = known
     ? "Found the ruler and read its scale — check the marks look right."
     : "Found evenly spaced marks — how far apart are they?";
   $("gen-detail").textContent = known
-    ? `${g.count} marks, ${g.pxPerTick.toFixed(1)} px apart. Every ${g.marksPerCm}th mark is `
-      + `a long one, so ${g.marksPerCm} marks = 1 cm ⇒ ${g.pxPerCm.toFixed(0)} px/cm.`
+    ? `${g.count} marks, ${g.pxPerTick.toFixed(1)} px apart. Every ${g.marksPerMajor}th is a `
+      + `long one — that is 1 ${g.majorUnit} — so the small marks are ${g.minorName} `
+      + `⇒ ${g.pxPerCm.toFixed(0)} px/cm.`
     : `${g.count} marks, ${g.pxPerTick.toFixed(2)} px apart`
       + (g.minorPerMajor?` (a long mark every ${g.minorPerMajor} — could be half-centimetres)`:``)
       + `. If they are millimetres that is ${(g.pxPerTick*10).toFixed(0)} px/cm; `
@@ -833,13 +836,18 @@ const genUse=mmPerTick=>{
   finalize({pxPerCm,markers:[a,b],
             spanLabel: spanCm>=1 ? `${spanCm.toFixed(1)} cm` : `${(spanCm*10).toFixed(0)} mm`});
 };
-$("gen-mm").onclick=()=>genUse(genFound&&!genFound.unitUnknown&&genFound.marksPerCm?null:1);
+$("gen-mm").onclick=()=>genUse(genFound&&!genFound.unitUnknown&&genFound.marksPerMajor?null:1);
 $("gen-cm").onclick=()=>genUse(10);
 $("gen-manual").onclick=()=>startTicks();
 
 // ---------- ruler box ----------
 let rbox=null,rdrag=false;
-function startRulerBox(){drawImgTo($("rulercanvas"));rbox=null;resetView("rulercanvas");
+// `why` is the detector's own account of what went wrong. Arriving here with
+// only the generic line reads as though the ruler was never looked at.
+function startRulerBox(why){drawImgTo($("rulercanvas"));rbox=null;resetView("rulercanvas");
+  $("rulerbox-hint").textContent = why
+    ? why+" Box the ruler to try a tighter area, or tap the marks."
+    : "Couldn't find the ruler automatically — box it, or tap the marks.";
   redrawR();$("ruler-detect").disabled=true;show("stage-rulerbox");}
 function redrawR(){const c=$("rulercanvas"),g=c.getContext("2d"),v=zoomViews["rulercanvas"];
   g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,c.width,c.height);
@@ -872,12 +880,18 @@ $("ruler-detect").onclick=()=>defer(()=>{
                      Math.abs(rbox[2]-rbox[0]),Math.abs(rbox[3]-rbox[1]),
                      src.cols,src.rows,32);
   if(!roi){src.delete();alert("That box is too small — draw a larger one around the ruler.");show("stage-rulerbox");return;}
-  let r=null; try{r=detectRuler(src,roi);}catch(e){setStatus("err "+cvErr(e));}
-  src.delete();
-  if(r){const p=twoCmTicksNear(r.cmTicks,lesion.centroid[0]);
-    if(p){finalize(p);return;}
-    if(r.sharpness<BLUR_THRESHOLD){showBlurry();return;}}
-  alert("No ruler ticks found — tap the two 1 cm marks instead.");startTicks();
+  // the same cascade as the automatic path, confined to the box just drawn
+  let r=null,g=null,pair=null;
+  try{
+    try{r=detectRuler(src,roi);}catch(e){setStatus("err "+cvErr(e));}
+    if(r) pair=twoCmTicksNear(r.cmTicks,lesion.centroid[0]);
+    if(!pair){ try{g=detectGenericRuler(src,roi,lesion.bbox);}catch(e){setStatus("err "+cvErr(e));} }
+  } finally { src.delete(); }
+  if(pair){finalize(pair);return;}
+  if(g){showGenRuler(g);return;}
+  const bwhy=(window.__genDiag&&window.__genDiag.reason)||"";
+  if(r&&r.sharpness<BLUR_THRESHOLD){showBlurry(bwhy);return;}
+  startTicks(bwhy?bwhy+" Tap two marks 1 cm apart instead.":undefined);
 });
 
 // ---------- tap two 1 cm marks ----------
@@ -918,9 +932,15 @@ $("ticks-done").onclick=()=>{const d=Math.hypot(tpts[1][0]-tpts[0][0],tpts[1][1]
   finalize({pxPerCm:d,markers:[tpts[0],tpts[1]]});};
 
 // ---------- blurry ----------
-function showBlurry(){$("blurry-msg").textContent=
-  "The ruler looks too blurry to read automatically. Retaking it in focus is best, "+
-  "but you can also box the ruler to try a tighter area, or tap the two 1 cm marks yourself.";
+// Low sharpness in the ruler area says the markings carry little detail. It
+// does NOT say the photo is out of focus: a sharp but small crop measures just
+// as low (rl3 is pin-sharp and lands here), and telling someone to retake a
+// good photo is the one unhelpful answer. State the evidence, offer both
+// causes, and pass on whatever the detector itself reported.
+function showBlurry(why){$("blurry-msg").textContent=
+  "The ruler markings are too faint to read automatically. "+(why?why+" ":"")+
+  "If the photo is out of focus, retaking it is best; if the ruler is just small "+
+  "in frame, get closer. You can also box the ruler, or tap the two 1 cm marks yourself.";
   show("stage-blurry");}
 $("blurry-retake").onclick=pickForMeasure;
 $("blurry-tap").onclick=()=>startTicks();
