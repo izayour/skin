@@ -22,6 +22,12 @@
              font-size:13px; background:#2e7d32; }
   main { padding:8px; max-width:720px; margin:0 auto; }
   .card { background:#1d1d1d; border-radius:12px; padding:10px; margin-bottom:8px; }
+  /* Messages that used to be alert() land here instead, so they keep their
+     line breaks and a failure reads as a failure. */
+  #status { white-space:pre-line; }
+  #status.bad { background:#3b1f1f; color:#ffcdd2; }
+  /* a destructive button waiting for its second tap */
+  button.armed { background:#ff5252; color:#141414; }
   button { border:0; border-radius:10px; padding:12px 10px; font-size:15px; font-weight:600;
            color:#fff; background:#2e7d32; width:100%; margin-top:8px; }
   button.secondary { background:#37474f; } button.danger { background:#c62828; }
@@ -142,10 +148,19 @@
     <label class="optline"><input type="checkbox" id="set-colour">
       <span>Show <b>Colour calibration</b> — an extra step that corrects colour
       from the card's strips before measuring.</span></label>
+    <label class="optline"><input type="checkbox" id="set-demo">
+      <span>Show <b>Demo photo</b> — a sample image to try a step on without
+      taking one.</span></label>
     <div style="margin-top:14px">
       <span class="hint"><span id="faillog-count">0</span> failed detection(s) logged.</span>
       <div class="row"><button id="faillog-copy" class="secondary">Copy failure log</button>
         <button id="faillog-clear" class="secondary">Clear</button></div>
+    </div>
+    <div style="margin-top:14px">
+      <span class="hint" id="reset-hint">Puts the app back to how it arrived:
+        every image, every saved measurement and the log above, gone.</span>
+      <div class="row tight"><button id="set-reset" class="danger">Reset everything</button>
+        <button id="reset-cancel" class="secondary hidden">Cancel</button></div>
     </div>
     <button id="set-back" class="secondary">Back</button>
   </section>
@@ -247,7 +262,6 @@
     <div class="row tight"><button id="pick-cam">Take a photo</button>
       <button id="pick-file" class="secondary">From device</button>
       <button id="pick-demo" class="secondary">Demo photo</button></div>
-    <div class="row tight"><button id="pick-back" class="secondary">Back</button></div>
   </section>
 
   <section id="stage-library" class="card hidden">
@@ -314,11 +328,11 @@
   </div>
 </main>
 
-<script src="js/pipeline.js?v=79"></script>
-<script src="js/ruler.js?v=79"></script>
-<script src="js/genruler.js?v=79"></script>
-<script src="js/skinopus.js?v=79"></script>
-<script src="js/library.js?v=79"></script>
+<script src="js/pipeline.js?v=85"></script>
+<script src="js/ruler.js?v=85"></script>
+<script src="js/genruler.js?v=85"></script>
+<script src="js/skinopus.js?v=85"></script>
+<script src="js/library.js?v=85"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
@@ -338,17 +352,47 @@ const APP_VERSION=(()=>{
 })();
 $("appver").textContent=`v${APP_RELEASE} (build ${APP_VERSION})`;
 const STAGES=["stage-capture","stage-settings","stage-box","stage-lmanual","stage-review","stage-rulerbox","stage-ticks","stage-blurry","stage-final","stage-genruler","stage-colour","stage-pick","stage-library","stage-steps","stage-gallery","stage-compare","spinner"];
+// Two taps instead of confirm(), for the same reason the reset button uses
+// them: a muted dialog reports "cancelled" and the button dies quietly.
+const _disarms=[];
+function disarmAll(){ _disarms.forEach(f=>f()); }
+function armable(btn,armedLabel,act){
+  const idle=btn.textContent;
+  let armed=false;
+  const disarm=()=>{ armed=false; btn.textContent=idle; btn.classList.remove("armed"); };
+  _disarms.push(disarm);
+  btn.onclick=async()=>{
+    if(!armed){ armed=true; btn.textContent=armedLabel(); btn.classList.add("armed"); return; }
+    disarm(); await act();
+  };
+  return disarm;
+}
 const show=id=>{
   STAGES.forEach(s=>$(s).classList.toggle("hidden",s!==id));
   // nothing to go back to from the menu itself, and interrupting a
   // spinner mid-computation would leave the run half-done
   $("home").classList.toggle("hidden", id==="stage-capture"||id==="spinner");
+  // The menu's buttons carry live counts, and a measurement finished on
+  // another screen changes them. Refreshing here covers every route back --
+  // it used to hang off "New photo" alone, so returning any other way left a
+  // finished measurement uncounted.
+  // back at the menu, last run's message has been read or abandoned
+  if(id==="stage-capture"){ setStatus(""); updateCompareUI(); libUpdateUI(); }
+  disarmAll();     // a half-pressed delete must not wait on another screen
 };
-const defer=fn=>{show("spinner");setTimeout(fn,30);};   // let spinner paint before heavy work
+// clears the last message: whatever it said is about to be answered by this run
+const defer=fn=>{setStatus("");show("spinner");setTimeout(fn,30);};
 // The status card sits above every stage, so once loading is done it is a
 // wasted row on a phone -- collapse it, and only bring it back for errors.
 // The version lives on the capture screen instead (see #appver).
-function setStatus(msg){const s=$("status");s.textContent=msg||"";s.classList.toggle("hidden",!msg);}
+// The app's only error channel. It used to be alert(), which a browser can
+// mute for the rest of the session -- after that every failure was silent.
+function setStatus(msg,bad){
+  const s=$("status");
+  s.textContent=msg||"";
+  s.classList.toggle("hidden",!msg);
+  s.classList.toggle("bad",!!bad);
+}
 function onOpenCvReady(){cvReady=true;setStatus("");show("stage-capture");
   // the pre-2.1 single library lived in localStorage and is superseded by the
   // originals/processed pair in IndexedDB -- drop it so it isn't holding quota
@@ -568,10 +612,27 @@ function setupPinchZoom(canvasId,redraw,onPinchStart){
 // Images are looked at on the Image libraries screen instead, and a step now
 // always starts from a fresh camera shot, a file off the device, or the demo.
 let pickStep=null, pickThen=null;
-function openPicker(step,title,instruct,then){
+// Which of the three ways in are actually on offer: the camera only on a
+// touch device, the demo only when switched on in Settings.
+const SOURCE_WORDS={"pick-cam":"take a photo","pick-file":"add one from your device",
+                    "pick-demo":"try the demo"};
+const sourceButtons=()=>["pick-cam","pick-file","pick-demo"]
+  .map($).filter(b=>!b.classList.contains("hidden"));
+function sourceSentence(){
+  const w=sourceButtons().map(b=>SOURCE_WORDS[b.id]);
+  if(!w.length) return "No way to add an image is switched on — see Settings.";
+  const list=w.length===1?w[0]:w.slice(0,-1).join(", ")+" or "+w[w.length-1];
+  return list[0].toUpperCase()+list.slice(1)+".";
+}
+function openPicker(step,title,note,then){
   pickStep=step; pickThen=then;
+  const srcs=sourceButtons();
+  // One way in is not a choice. Trigger it and never show this screen at all:
+  // the stage the user pressed the button on stays put, so cancelling the file
+  // dialog leaves them there rather than on a page with a single option.
+  if(srcs.length===1){ srcs[0].click(); return; }
   $("pick-badge").textContent=title;
-  $("pick-instruct").textContent=instruct;
+  $("pick-instruct").textContent=note+sourceSentence();
   show("stage-pick");
 }
 // the steps a lineage already carries -- "Standard" when it carries none
@@ -580,14 +641,13 @@ function stepTags(steps){
   return on.length ? on.map(s=>`<span class="tag">${s[1]}</span>`).join("")
                    : `<span class="tag none">Standard — unprocessed</span>`;
 }
-$("pick-back").onclick=()=>show("stage-capture");
 
 // ---------- settings -------------------------------------------------------
 // Both default off: the automatic outline is right on most photos, and colour
 // calibration is a step for the card, not for a plain lesion photo. Turning
 // one on only makes its button appear -- the code behind it never went away.
 const SETTINGS_KEY="settings";
-const DEFAULTS={trace:false,colour:false};
+const DEFAULTS={trace:false,colour:false,demo:false};
 function loadSettings(){
   try{ return {...DEFAULTS,...JSON.parse(localStorage.getItem(SETTINGS_KEY)||"{}")}; }
   catch(e){ return {...DEFAULTS}; }
@@ -597,8 +657,10 @@ function applySettings(){
   $("ltrace").classList.toggle("hidden",!settings.trace);
   $("reject-trace").classList.toggle("hidden",!settings.trace);
   $("cc-open").classList.toggle("hidden",!settings.colour);
+  $("pick-demo").classList.toggle("hidden",!settings.demo);
   $("set-trace").checked=settings.trace;
   $("set-colour").checked=settings.colour;
+  $("set-demo").checked=settings.demo;
 }
 function setOption(k,v){
   settings[k]=v;
@@ -607,8 +669,57 @@ function setOption(k,v){
 }
 $("set-trace").onchange=e=>setOption("trace",e.target.checked);
 $("set-colour").onchange=e=>setOption("colour",e.target.checked);
-$("settings-open").onclick=()=>{ updateFailUI(); show("stage-settings"); };
-$("set-back").onclick=()=>show("stage-capture");
+$("set-demo").onchange=e=>setOption("demo",e.target.checked);
+$("settings-open").onclick=()=>{ updateFailUI(); disarmReset(); show("stage-settings"); };
+$("set-back").onclick=()=>{ disarmReset(); show("stage-capture"); };
+// Wipe. Everything the app has put on this device lives in two places: the
+// image libraries in IndexedDB, and the measurements, failure log and these
+// switches in localStorage. None of it is recoverable afterwards, so the
+// confirmation counts what is about to go rather than asking in the abstract.
+// The confirmation is two taps on the page, not a confirm() dialog. Chrome
+// lets a page be muted permanently -- one tick of "don't let this page create
+// more dialogs" and confirm() returns false for the rest of the session, with
+// no way for the page to know. The button then does nothing at all, which is
+// exactly how this first went wrong.
+const RESET_HINT="Puts the app back to how it arrived: every image, "
+                +"every saved measurement and the log above, gone.";
+let resetArmed=false;
+function disarmReset(){
+  resetArmed=false;
+  $("set-reset").textContent="Reset everything";
+  $("reset-cancel").classList.add("hidden");
+  $("reset-hint").textContent=RESET_HINT;
+}
+$("reset-cancel").onclick=disarmReset;
+_disarms.push(disarmReset);        // and it disarms on any change of screen
+$("set-reset").onclick=async()=>{
+  if(!resetArmed){
+    const imgs=(await libAll("originals")).length;
+    const meas=loadResults().length;
+    const fails=JSON.parse(localStorage.getItem("faillog")||"[]").length;
+    resetArmed=true;
+    $("set-reset").textContent="Yes — delete it all";
+    $("reset-cancel").classList.remove("hidden");
+    $("reset-hint").textContent=
+      `About to delete ${imgs} image${imgs===1?"":"s"} in the libraries, `
+      +`${meas} saved measurement${meas===1?"":"s"}, `
+      +`${fails} logged failure${fails===1?"":"s"}, and put the switches above `
+      +`back to their defaults. This cannot be undone — tap again to confirm.`;
+    return;
+  }
+  try{
+    await libClearAll();
+    localStorage.removeItem(RESULTS_KEY);
+    localStorage.removeItem("faillog");
+    localStorage.removeItem(SETTINGS_KEY);
+  }catch(e){ setStatus("reset failed: "+e); return; }
+  // every id and selection now points at something that is gone
+  currentLibId=null; lastSavedId=null; gsel=[]; libSel=null;
+  settings={...DEFAULTS};
+  applySettings(); updateFailUI(); disarmReset();
+  show("stage-capture");            // refreshes the menu's counts on the way in
+  setStatus("Everything cleared.");
+};
 // Abandons whatever stage is open. Nothing is saved until a measurement
 // finishes, so the only loss is work in progress on this screen.
 $("home").onclick=()=>show("stage-capture");
@@ -657,10 +768,9 @@ async function usePicked(id){
   pickThen(im);
 }
 
-const pickForMeasure=()=>openPicker("area","Measure a lesion",
-  "Take a photo, add one from your device, or try the demo.",startMeasure);
+const pickForMeasure=()=>openPicker("area","Measure a lesion","",startMeasure);
 const pickForColour=()=>openPicker("colour","Colour calibration",
-  "Take a photo of the card, add one from your device, or try the demo.",startColour);
+  "The photo needs the card's colour strips in it. ",startColour);
 $("go-measure").onclick=pickForMeasure;
 $("cc-open").onclick=pickForColour;
 
@@ -701,7 +811,9 @@ $("detect").onclick=()=>defer(()=>{
   const box=clampRoi(Math.min(lbox[0],lbox[2]),Math.min(lbox[1],lbox[3]),
                      Math.abs(lbox[2]-lbox[0]),Math.abs(lbox[3]-lbox[1]),
                      src.cols,src.rows,16);
-  if(!box){src.delete();alert("That box is too small — drag a larger one around the lesion.");show("stage-box");return;}
+  if(!box){src.delete();
+    setStatus("That box is too small — drag a larger one around the lesion.",true);
+    show("stage-box");return;}
   const {x,y,w,h}=box;
   const bg=Math.max(31,Math.floor(Math.min(w,h)*0.9))|1;
   let res=null; try{res=segmentLesion(src,box,bg);}
@@ -709,8 +821,10 @@ $("detect").onclick=()=>defer(()=>{
   src.delete();
   if(!res){
     logFailure([x,y,w,h]);
-    alert("Couldn't detect the lesion ("+(window.__segReason||"?")+")\nbox="+JSON.stringify([x,y,w,h])+"\n(logged for analysis)\nDraw a tighter box around the lesion and try again."
-      +(settings.trace?"\nOr tap 'Trace myself' to draw the border by hand.":""));
+    setStatus("Couldn't detect the lesion ("+(window.__segReason||"?")+")\nbox="
+      +JSON.stringify([x,y,w,h])+"\n(logged for analysis)\n"
+      +"Draw a tighter box around the lesion and try again."
+      +(settings.trace?"\nOr tap 'Trace myself' to draw the border by hand.":""),true);
     show("stage-box");return;
   }
   lesion=res; showReview();
@@ -753,8 +867,17 @@ function updateFailUI(){
 }
 $("faillog-copy").onclick=async()=>{
   const txt=localStorage.getItem("faillog")||"[]";
-  try{ await navigator.clipboard.writeText(txt); alert("Failure log copied — paste it to Claude."); }
-  catch(e){ prompt("Copy the log below:", txt); }
+  try{
+    await navigator.clipboard.writeText(txt);
+    setStatus("Failure log copied — paste it to Claude.");
+  }catch(e){
+    // prompt() is a dialog too, and just as mutable. Put the log on the page
+    // and select it, so a copy is one keystroke away.
+    setStatus("Couldn't reach the clipboard. The log is below — it is selected, "
+             +"so copy it now.\n\n"+txt);
+    const r=document.createRange(); r.selectNodeContents($("status"));
+    const sel=getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  }
 };
 $("faillog-clear").onclick=()=>{ localStorage.removeItem("faillog"); updateFailUI(); };
 
@@ -934,7 +1057,9 @@ $("ruler-detect").onclick=()=>defer(()=>{
   const roi=clampRoi(Math.min(rbox[0],rbox[2]),Math.min(rbox[1],rbox[3]),
                      Math.abs(rbox[2]-rbox[0]),Math.abs(rbox[3]-rbox[1]),
                      src.cols,src.rows,32);
-  if(!roi){src.delete();alert("That box is too small — draw a larger one around the ruler.");show("stage-rulerbox");return;}
+  if(!roi){src.delete();
+    setStatus("That box is too small — draw a larger one around the ruler.",true);
+    show("stage-rulerbox");return;}
   // the same cascade as the automatic path, confined to the box just drawn
   let r=null,g=null,pair=null;
   try{
@@ -1176,6 +1301,7 @@ function renderGallery(){
     };
     g.appendChild(d);
   });
+  disarmGalDel();                       // the selection just changed under it
   $("gal-go").disabled=gsel.length<2;
   $("gal-go").textContent = gsel.length>2 ? `Compare ${gsel.length}` : "Compare";
   $("gal-del").disabled=gsel.length===0;
@@ -1185,11 +1311,12 @@ function renderGallery(){
 }
 $("compare-open").onclick=()=>{gsel=[];renderGallery();show("stage-gallery");};
 $("gal-back").onclick=()=>show("stage-capture");
-$("gal-del").onclick=()=>{
-  if(!confirm(`Delete ${gsel.length} saved measurement(s)? This can't be undone.`))return;
-  writeResults(loadResults().filter(r=>!gsel.includes(r.id)));
-  gsel=[];renderGallery();updateCompareUI();
-};
+const disarmGalDel=armable($("gal-del"),
+  ()=>`Delete ${gsel.length} — tap again`,
+  ()=>{
+    writeResults(loadResults().filter(r=>!gsel.includes(r.id)));
+    gsel=[];renderGallery();updateCompareUI();
+  });
 $("cmp-back").onclick=()=>{renderGallery();show("stage-gallery");};
 
 $("reject-trace").onclick=()=>{lesion=null;startLManual();};
@@ -1274,6 +1401,7 @@ async function renderLibrary(){
     d.onclick=()=>{libSel=(libSel===r.id?null:r.id);renderLibrary();};
     g.appendChild(d);
   });
+  disarmLibDel();                       // the selection just changed under it
   $("lib-steps").disabled=libSel===null||libTab==="orig";
   $("lib-steps").classList.toggle("hidden",libTab==="orig");
   $("lib-del").disabled=libSel===null;
@@ -1289,16 +1417,18 @@ $("lib-open").onclick=()=>{libSel=null;renderLibrary();show("stage-library");};
 $("lib-back").onclick=()=>show("stage-capture");
 // In Standard the whole lineage goes; in Processed only the steps go, putting
 // the original back on offer everywhere.
-$("lib-del").onclick=async()=>{
-  if(libSel===null) return;
-  const whole=libTab==="orig";
-  if(!confirm(whole
-      ? "Delete this image and everything processed from it? This can't be undone."
-      : "Discard every processing step on this image? The original is kept.")) return;
-  await libForget(libSel,!whole);
-  if(currentLibId===libSel) currentLibId=null;
-  libSel=null; renderLibrary(); libUpdateUI();
-};
+const disarmLibDel=armable($("lib-del"),
+  // Standard deletes the whole lineage; Processed only discards the steps,
+  // which is a much smaller thing to agree to -- so the labels differ.
+  ()=>libTab==="orig" ? "Delete image and all its steps — tap again"
+                      : "Discard steps, keep original — tap again",
+  async()=>{
+    if(libSel===null) return;
+    const whole=libTab==="orig";
+    await libForget(libSel,!whole);
+    if(currentLibId===libSel) currentLibId=null;
+    libSel=null; renderLibrary(); libUpdateUI();
+  });
 // Each finished step shows its own picture and its own numbers -- ticks alone
 // said the work had happened without ever showing the result of it.
 let stepsRec=null;

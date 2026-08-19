@@ -164,6 +164,17 @@ async function libCandidates(step,includeDone){
 
 // Dropping a processed record alone undoes every step and leaves the original
 // available again; dropping the original takes the whole lineage with it.
+// Empty both stores in one transaction: a per-record loop can leave half the
+// library behind if it fails partway, which is the worst outcome for a wipe.
+function libClearAll(){
+  return libDB().then(d=>new Promise((res,rej)=>{
+    const tx=d.transaction(["originals","processed"],"readwrite");
+    tx.objectStore("originals").clear();
+    tx.objectStore("processed").clear();
+    tx.oncomplete=()=>res();
+    tx.onerror=()=>rej(tx.error);
+  }));
+}
 function libForget(id,keepOriginal){
   return libDB().then(d=>new Promise((res,rej)=>{
     const tx=d.transaction(["originals","processed"],"readwrite");
