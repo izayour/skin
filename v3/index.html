@@ -1,0 +1,1726 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Skin Lesion Scanner</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:system-ui,sans-serif; background:#111; color:#eee; }
+  header { display:flex; align-items:center; gap:10px;
+           padding:8px 14px; background:#1b5e20; font-weight:600; font-size:16px; }
+  /* one logo file for every page: black artwork on transparency, inverted to
+     white here because every header it sits on is dark */
+  /* Horizontal lockup: bird and wordmark on one line, so the header costs a
+     row of pixels instead of two. It carries the product name itself, which
+     is why no title text sits beside it. */
+  .brand { height:32px; width:auto; display:block; flex:none; filter:invert(1); }
+  /* Way out of any stage. It lives in the header, which sits outside the
+     stages, so one button covers every screen instead of each stage
+     needing its own. Overrides the full-width button rule below. */
+  .homebtn { margin:0 0 0 auto; width:auto; flex:none; padding:7px 12px;
+             font-size:13px; background:#2e7d32; }
+  main { padding:8px; max-width:720px; margin:0 auto; }
+  .card { background:#1d1d1d; border-radius:12px; padding:10px; margin-bottom:8px; }
+  /* Messages that used to be alert() land here instead, so they keep their
+     line breaks and a failure reads as a failure. */
+  #status { white-space:pre-line; }
+  #status.bad { background:#3b1f1f; color:#ffcdd2; }
+  /* a destructive button waiting for its second tap */
+  button.armed { background:#ff5252; color:#141414; }
+  button { border:0; border-radius:10px; padding:12px 10px; font-size:15px; font-weight:600;
+           color:#fff; background:#2e7d32; width:100%; margin-top:8px; }
+  button.secondary { background:#37474f; } button.danger { background:#c62828; }
+  button:disabled { opacity:.4; }
+  .row { display:flex; gap:8px; } .row button { flex:1; min-width:0; }
+  /* three across: shrink the label rather than wrapping onto another line */
+  .row.tight button { font-size:13px; padding:12px 4px; }
+  /* Bound the photo's height so the action buttons stay on screen without
+     scrolling -- a portrait 3:4 photo at width:100% is ~500px tall on a phone
+     and pushed them below the fold. width/height auto keeps the aspect ratio;
+     the backing store is untouched, so hit-testing math is unaffected. */
+  canvas { display:block; margin:0 auto; max-width:100%; max-height:46vh;
+           width:auto; height:auto; border-radius:10px; touch-action:none; }
+  .hint { font-size:12px; color:#9e9e9e; margin:4px 0 0; }
+  /* the "what do I do now" line -- brighter than .hint because a user staring
+     at a photo with no visible affordance needs telling, not a footnote */
+  .instruct { font-size:14px; font-weight:600; color:#ffd54f; margin:0 0 6px; }
+  .zoomrow { display:flex; gap:8px; margin-top:8px; align-items:center; }
+  .zoomrow button { flex:0 0 auto; width:46px; margin-top:0; padding:8px 0;
+                    font-size:19px; line-height:1; }
+  .zoomrow .zoomlvl { flex:1; text-align:center; font-size:13px; color:#9e9e9e; }
+  .stats { font-size:14px; color:#bbb; margin-top:10px; line-height:1.6; }
+  .badge { display:inline-block; padding:2px 10px; border-radius:999px; background:#333;
+           font-size:13px; margin-bottom:8px; }
+  #status { font-size:13px; color:#9e9e9e; }
+  .warn { color:#ffb74d; font-size:13px; line-height:1.5; margin:0 0 6px; }
+  .hidden { display:none; }
+  .disclaimer { font-size:12px; color:#777; margin-top:8px; }
+  .gallery { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;
+             max-height:52vh; overflow-y:auto; }
+  .gitem { border:2px solid #333; border-radius:8px; padding:4px; background:#262626; }
+  .gitem.sel { border-color:#00e676; }
+  .gitem img { width:100%; border-radius:6px; display:block; }
+  .gitem .meta { font-size:11px; color:#bbb; margin-top:4px; line-height:1.35; }
+  .gitem .pick { font-size:11px; color:#00e676; font-weight:700; }
+  /* which steps a lineage already carries, so the gallery says why an image is
+     or isn't on offer without opening its checklist */
+  .gitem .tags { margin-top:3px; }
+  .gitem .tag { display:inline-block; font-size:10px; padding:1px 6px; margin:1px 2px 0 0;
+                border-radius:999px; background:#33691e; color:#dcedc8; }
+  .gitem .tag.none { background:#333; color:#9e9e9e; }
+  button.tab { background:#263238; margin-top:0; }
+  button.tab.on { background:#2e7d32; }
+  .cmp { display:flex; gap:8px; }
+  .cmp > div { flex:1; min-width:0; }
+  .cmp img { width:100%; border-radius:8px; display:block; }
+  .cmp .cap { font-size:11px; color:#bbb; margin-top:4px; line-height:1.4; }
+  /* Two photos fit across a phone side by side, which is the layout that lets
+     the eye flick between them. Three or more do not -- each would be a third
+     of the width and too small to read -- so they stack and are scrolled
+     through instead, each capped so one photo does not fill the whole screen. */
+  .cmp.stack { flex-direction:column; gap:14px; }
+  .cmp.stack > div { flex:none; }
+  .cmp.stack img { width:auto; max-width:100%; max-height:55vh; margin:0 auto; }
+  .cmp.stack .cap { text-align:center; }   /* centred image, so centre its caption */
+  .delta { margin-top:10px; font-size:14px; line-height:1.7; }
+  .delta .series { font-size:13px; line-height:1.6; margin:6px 0 8px;
+                   padding:7px 9px; background:#222; border-radius:6px; }
+  .delta .big { font-size:19px; font-weight:700; display:block; margin-bottom:4px; }
+  .grew { color:#ff8a65; } .shrank { color:#4fc3f7; } .steady { color:#9e9e9e; }
+  .steplist { list-style:none; padding:0; margin:10px 0 0; }
+  .steplist li { display:flex; gap:10px; align-items:flex-start; padding:9px 4px;
+                 border-bottom:1px solid #2a2a2a; font-size:15px; }
+  .steplist li:last-child { border-bottom:0; }
+  .steplist li { align-items:center; }
+  .steplist .tick { flex:0 0 22px; font-size:17px; line-height:1.3; }
+  .steplist .done { color:#00e676; } .steplist .todo { color:#616161; }
+  .steplist .lbl { flex:1; min-width:0; line-height:1.35; }
+  .steplist .sub { display:block; font-size:12px; color:#8a8a8a; margin-top:2px; }
+  /* each finished step keeps its own picture of what it produced -- cropped to
+     the region it annotated, or the outline is a couple of pixels wide */
+  .steplist .nums { display:block; font-size:12px; color:#cfd8dc; margin-top:3px; }
+  .steplist .shot { flex:0 0 78px; }
+  .steplist .shot img { width:78px; border-radius:6px; display:block; cursor:zoom-in; }
+  .optline { display:flex; gap:8px; align-items:flex-start; margin-top:10px;
+             font-size:13px; color:#bbb; line-height:1.4; }
+  .optline input { width:20px; height:20px; flex:0 0 auto; margin:0; }
+  /* full-screen view of one comparison image. The id beats .hidden on
+     specificity, so the hidden state has to be spelled out for the id too. */
+  #lightbox { position:fixed; inset:0; z-index:50; background:#000000ee;
+              display:flex; flex-direction:column; align-items:center;
+              justify-content:center; padding:12px; }
+  #lightbox.hidden { display:none; }
+  #lightbox img { max-width:100%; max-height:74vh; object-fit:contain;
+                  border-radius:8px; }
+  #lb-cap { color:#eee; font-size:14px; line-height:1.5; text-align:center;
+            margin-top:12px; }
+  #lightbox button { max-width:340px; margin-top:14px; }
+  .cmp img { cursor:zoom-in; }
+</style>
+</head>
+<body>
+<header><img class="brand" src="logo-wide.png" alt="Canary Detect">
+  <button id="home" class="homebtn hidden">Main menu</button></header>
+<main>
+  <div id="status" class="card">Loading OpenCV.js…</div>
+
+  <section id="stage-capture" class="card hidden">
+    <p class="hint">Pick a processing step. Each one asks which image to run it
+      on, and offers the images it hasn't been run on yet.</p>
+    <button id="go-measure">Measure a lesion</button>
+    <button class="secondary hidden" id="cc-open">Colour calibration</button>
+    <button class="secondary" id="compare-open" disabled>Compare over time</button>
+    <button class="secondary" id="lib-open">Image libraries</button>
+    <button class="secondary" id="settings-open">Settings</button>
+    <p class="disclaimer">Not a medical device. For demonstration only — does not diagnose.<br>
+      <span id="appver">Version …</span></p>
+  </section>
+
+  <!-- Options that are off out of the box, plus the failure log that used to
+       sit on the menu. Both switches turn on a fallback that most runs never
+       need: hand-tracing a border, and the colour-calibration step. -->
+  <section id="stage-settings" class="card hidden">
+    <span class="badge">Settings</span>
+    <label class="optline"><input type="checkbox" id="set-trace">
+      <span>Show <b>Trace myself</b> — draw the lesion border by hand when the
+      automatic outline is wrong or fails.</span></label>
+    <label class="optline"><input type="checkbox" id="set-colour">
+      <span>Show <b>Colour calibration</b> — an extra step that corrects colour
+      from the card's strips before measuring.</span></label>
+    <label class="optline"><input type="checkbox" id="set-demo">
+      <span>Show <b>Demo photo</b> — a sample image to try a step on without
+      taking one.</span></label>
+    <div style="margin-top:14px">
+      <span class="hint"><span id="faillog-count">0</span> failed detection(s) logged.</span>
+      <div class="row"><button id="faillog-copy" class="secondary">Copy failure log</button>
+        <button id="faillog-clear" class="secondary">Clear</button></div>
+    </div>
+    <div style="margin-top:14px">
+      <span class="hint" id="reset-hint">Puts the app back to how it arrived:
+        every image, every saved measurement and the log above, gone.</span>
+      <div class="row tight"><button id="set-reset" class="danger">Reset everything</button>
+        <button id="reset-cancel" class="secondary hidden">Cancel</button></div>
+    </div>
+    <button id="set-back" class="secondary">Back</button>
+  </section>
+
+  <div id="spinner" class="card hidden">Working…</div>
+
+  <section id="stage-box" class="card hidden">
+    <span class="badge">Step 1 of 2 · Lesion</span>
+    <p class="instruct" id="box-instruct">Drag your finger across the photo to draw a box around the lesion.</p>
+    <canvas id="canvas"></canvas>
+    <p class="hint">The box just needs to contain the lesion — it doesn't have to be tight.</p>
+    <div class="row tight"><button id="detect" disabled>Detect</button>
+      <button id="ltrace" class="secondary hidden">Trace myself</button>
+      <button id="rebox" class="secondary">New photo</button></div>
+  </section>
+
+  <section id="stage-lmanual" class="card hidden">
+    <span class="badge">Trace the border</span>
+    <p class="instruct" id="lm-instruct">Zoom in first, then tap points around the edge of the lesion.</p>
+    <canvas id="lmcanvas"></canvas>
+    <p class="hint">Pinch or use +/− to zoom · drag to move · tap to place a point (at least 3, in order).</p>
+    <div class="zoomrow">
+      <button class="secondary" id="lm-zoomout">−</button>
+      <span class="zoomlvl" id="lm-zoomlvl">1.0×</span>
+      <button class="secondary" id="lm-zoomin">+</button>
+      <button class="secondary" id="lm-zoomreset" style="width:auto;padding:10px 14px;font-size:14px">Fit</button>
+    </div>
+    <div class="row tight"><button id="lm-done" disabled>Done</button>
+      <button id="lm-undo" class="secondary">Undo point</button>
+      <button id="lm-back" class="danger">Cancel</button></div>
+  </section>
+
+  <section id="stage-review" class="card hidden">
+    <span class="badge">Lesion found — accept?</span>
+    <p class="instruct">Does the green outline match the lesion?</p>
+    <canvas id="rcanvas"></canvas>
+    <div class="row tight"><button id="accept">Accept</button>
+      <button id="reject-trace" class="secondary hidden">Trace myself</button>
+      <button id="reject" class="danger">Redraw box</button></div>
+  </section>
+
+  <section id="stage-rulerbox" class="card hidden">
+    <span class="badge">2 · Draw a box around the ruler</span>
+    <canvas id="rulercanvas"></canvas>
+    <p class="hint" id="rulerbox-hint">Couldn't find the ruler automatically — box it, or tap the marks.</p>
+    <div class="row tight"><button id="ruler-detect" disabled>Detect ticks</button>
+      <button id="ruler-tap" class="secondary">Tap ticks</button>
+      <button id="rulerbox-back" class="danger">Back</button></div>
+  </section>
+
+  <section id="stage-ticks" class="card hidden">
+    <span class="badge">1 cm marks</span>
+    <p class="warn hidden" id="ticks-why"></p>
+    <p class="instruct" id="tick-instruct">Zoom in, then tap two marks exactly 1 cm apart.</p>
+    <canvas id="tickcanvas"></canvas>
+    <p class="hint">Pinch or +/− to zoom · drag to move · tap to place a mark.</p>
+    <div class="zoomrow">
+      <button class="secondary" id="tk-zoomout">−</button>
+      <span class="zoomlvl" id="tk-zoomlvl">1.0×</span>
+      <button class="secondary" id="tk-zoomin">+</button>
+      <button class="secondary" id="tk-zoomreset" style="width:auto;padding:8px 12px;font-size:13px">Fit</button>
+    </div>
+    <div class="row tight"><button id="ticks-done" disabled>Use these</button>
+      <button id="ticks-undo" class="secondary">Undo mark</button>
+      <button id="ticks-back" class="danger">Back</button></div>
+  </section>
+
+  <section id="stage-blurry" class="card hidden">
+    <span class="badge">Too blurry</span>
+    <p class="warn" id="blurry-msg"></p>
+    <div class="row tight"><button id="blurry-retake">Retake photo</button>
+      <button id="blurry-box" class="secondary">Box the ruler</button>
+      <button id="blurry-tap" class="secondary">Tap ticks</button></div>
+    <button id="blurry-back" class="danger">Back to lesion</button>
+  </section>
+
+  <section id="stage-genruler" class="card hidden">
+    <span class="badge">General ruler</span>
+    <p class="instruct" id="gen-instruct">Found evenly spaced marks — how far apart are they?</p>
+    <canvas id="gencanvas"></canvas>
+    <p class="hint" id="gen-detail"></p>
+    <div class="row tight"><button id="gen-mm">1 mm apart</button>
+      <button id="gen-cm" class="secondary">1 cm apart</button>
+      <button id="gen-manual" class="secondary">Tap ticks</button></div>
+    <button id="gen-back" class="danger">Reject — back to lesion</button>
+  </section>
+
+  <!-- Where an image comes from before a step runs on it: camera, device, or
+       the demo photo. It used to also list the library as thumbnails to pick
+       from; that grid is gone -- the Image libraries screen is where images are
+       looked at. -->
+  <section id="stage-pick" class="card hidden">
+    <span class="badge" id="pick-badge">Choose an image</span>
+    <p class="instruct" id="pick-instruct"></p>
+    <!-- two inputs: `capture` forces the camera, so device-gallery access needs
+         an input without it. They live here, next to the buttons that use them. -->
+    <input id="file" type="file" accept="image/*" capture="environment" class="hidden">
+    <input id="filepick" type="file" accept="image/*" class="hidden">
+    <div class="row tight"><button id="pick-cam">Take a photo</button>
+      <button id="pick-file" class="secondary">From device</button>
+      <button id="pick-demo" class="secondary">Demo photo</button></div>
+  </section>
+
+  <section id="stage-library" class="card hidden">
+    <div class="row tight"><button id="tab-orig" class="tab">Standard</button>
+      <button id="tab-proc" class="tab">Processed</button></div>
+    <p class="instruct" id="lib-instruct">Pick an image to see what has been done to it.</p>
+    <div class="gallery" id="library"></div>
+    <div class="row tight"><button id="lib-steps" disabled>Steps</button>
+      <button id="lib-del" class="danger" disabled>Delete</button>
+      <button id="lib-back" class="secondary">Back</button></div>
+  </section>
+
+  <section id="stage-steps" class="card hidden">
+    <span class="badge">Processing steps</span>
+    <p class="instruct" id="steps-title"></p>
+    <img id="steps-thumb" alt="" style="width:100%;border-radius:10px;display:block">
+    <p class="hint">Most recent result. Tap any thumbnail below to see that
+      step's own result full screen.</p>
+    <ul class="steplist" id="steps-list"></ul>
+    <button id="steps-back" class="secondary">Back</button>
+  </section>
+
+  <section id="stage-colour" class="card hidden">
+    <span class="badge">Colour calibration</span>
+    <p class="instruct" id="cc-instruct">Looking for the card's colour strips…</p>
+    <canvas id="ccanvas"></canvas>
+    <p class="hint" id="cc-detail"></p>
+    <div class="row tight"><button id="cc-apply" class="hidden">Apply correction</button>
+      <button id="cc-again" class="secondary">Another image</button>
+      <button id="cc-back" class="secondary">Back</button></div>
+  </section>
+
+  <section id="stage-gallery" class="card hidden">
+    <span class="badge">Compare over time</span>
+    <p class="instruct" id="gal-instruct">Pick two or more saved measurements to compare.</p>
+    <div class="gallery" id="gallery"></div>
+    <div class="row tight"><button id="gal-go" disabled>Compare</button>
+      <button id="gal-del" class="danger" disabled>Delete</button>
+      <button id="gal-back" class="secondary">Back</button></div>
+  </section>
+
+  <section id="stage-compare" class="card hidden">
+    <span class="badge">Change over time</span>
+    <div class="cmp" id="cmp-imgs"></div>
+    <p class="hint">Double-tap any photo to see it full screen.</p>
+    <div class="delta" id="cmp-delta"></div>
+    <p class="disclaimer">Sizes come from each photo's own ruler calibration, so
+      small differences may be measurement error rather than real change. Not a
+      diagnosis — discuss any change with a clinician.</p>
+    <button id="cmp-back" class="secondary">Back</button>
+  </section>
+
+  <section id="stage-final" class="card hidden">
+    <span class="badge" id="final-method">Result</span>
+    <canvas id="fcanvas"></canvas>
+    <div class="stats" id="fstats"></div>
+    <div class="row tight"><button id="restart" class="secondary">New photo</button>
+      <button id="redo-scale" class="danger">Reject &amp; redo scale</button></div>
+  </section>
+  <div id="lightbox" class="hidden">
+    <img id="lb-img" alt="">
+    <div id="lb-cap"></div>
+    <button id="lb-close" class="secondary">Close</button>
+  </div>
+</main>
+
+<script src="js/pipeline.js?v=85"></script>
+<script src="js/ruler.js?v=85"></script>
+<script src="js/genruler.js?v=85"></script>
+<script src="js/skinopus.js?v=85"></script>
+<script src="js/library.js?v=85"></script>
+<script>
+let cvReady=false, img=new Image(), lesion=null;
+const $=id=>document.getElementById(id);
+// Read the build number off the ?v= cache-buster rather than hardcoding it
+// again here -- one place to bump, so the displayed version can't drift from
+// the code actually loaded.
+// Release line, bumped by hand at a code freeze. The build number below is the
+// ?v= cache-buster and keeps incrementing during development, so a screen can
+// always be pinned to an exact build -- which is how a stale cached page gets
+// spotted. Both are shown: the release says which version you have, the build
+// says whether the refresh actually took.
+const APP_RELEASE="3.0-dev";
+const APP_VERSION=(()=>{
+  const s=document.querySelector('script[src*="pipeline.js"]');
+  const m=s&&s.getAttribute("src").match(/v=(\d+)/);
+  return m?m[1]:"?";
+})();
+$("appver").textContent=`v${APP_RELEASE} (build ${APP_VERSION})`;
+const STAGES=["stage-capture","stage-settings","stage-box","stage-lmanual","stage-review","stage-rulerbox","stage-ticks","stage-blurry","stage-final","stage-genruler","stage-colour","stage-pick","stage-library","stage-steps","stage-gallery","stage-compare","spinner"];
+// Two taps instead of confirm(), for the same reason the reset button uses
+// them: a muted dialog reports "cancelled" and the button dies quietly.
+const _disarms=[];
+function disarmAll(){ _disarms.forEach(f=>f()); }
+function armable(btn,armedLabel,act){
+  const idle=btn.textContent;
+  let armed=false;
+  const disarm=()=>{ armed=false; btn.textContent=idle; btn.classList.remove("armed"); };
+  _disarms.push(disarm);
+  btn.onclick=async()=>{
+    if(!armed){ armed=true; btn.textContent=armedLabel(); btn.classList.add("armed"); return; }
+    disarm(); await act();
+  };
+  return disarm;
+}
+const show=id=>{
+  STAGES.forEach(s=>$(s).classList.toggle("hidden",s!==id));
+  // nothing to go back to from the menu itself, and interrupting a
+  // spinner mid-computation would leave the run half-done
+  $("home").classList.toggle("hidden", id==="stage-capture"||id==="spinner");
+  // The menu's buttons carry live counts, and a measurement finished on
+  // another screen changes them. Refreshing here covers every route back --
+  // it used to hang off "New photo" alone, so returning any other way left a
+  // finished measurement uncounted.
+  // back at the menu, last run's message has been read or abandoned
+  if(id==="stage-capture"){ setStatus(""); updateCompareUI(); libUpdateUI(); }
+  disarmAll();     // a half-pressed delete must not wait on another screen
+};
+// clears the last message: whatever it said is about to be answered by this run
+const defer=fn=>{setStatus("");show("spinner");setTimeout(fn,30);};
+// The status card sits above every stage, so once loading is done it is a
+// wasted row on a phone -- collapse it, and only bring it back for errors.
+// The version lives on the capture screen instead (see #appver).
+// The app's only error channel. It used to be alert(), which a browser can
+// mute for the rest of the session -- after that every failure was silent.
+function setStatus(msg,bad){
+  const s=$("status");
+  s.textContent=msg||"";
+  s.classList.toggle("hidden",!msg);
+  s.classList.toggle("bad",!!bad);
+}
+function onOpenCvReady(){cvReady=true;setStatus("");show("stage-capture");
+  // the pre-2.1 single library lived in localStorage and is superseded by the
+  // originals/processed pair in IndexedDB -- drop it so it isn't holding quota
+  try{ localStorage.removeItem("library"); }catch(e){}
+  applySettings();updateFailUI();updateCompareUI();libUpdateUI();}
+let imgName="(none)";
+
+// screen -> image pixels. With a view, undo its scale/offset so callers keep
+// working in image coordinates no matter how far the user has zoomed in.
+// Clamped to the image: a drag continues to fire outside the canvas (pointer
+// capture), so without this a finger sliding off the photo yields negative or
+// past-the-edge coordinates, and OpenCV throws on the out-of-range ROI
+// ("(-215) 0 <= roi.x && ... roi.x + roi.width <= m.cols").
+function pos(c,ev,v){const r=c.getBoundingClientRect();
+  let cx=(ev.clientX-r.left)*c.width/r.width, cy=(ev.clientY-r.top)*c.height/r.height;
+  if(v){cx=cx/v.s+v.x; cy=cy/v.s+v.y;}
+  return [Math.min(Math.max(cx,0),c.width), Math.min(Math.max(cy,0),c.height)];}
+
+// OpenCV.js throws a raw pointer, which surfaces as a useless "err 6924848".
+// Turn it into the actual assertion text for the status line and the log.
+function cvErr(e){
+  if(typeof e==="number"){
+    try{ return (cv.exceptionFromPtr(e).msg||"").trim() || ("cv exception "+e); }
+    catch(_){ return "cv exception "+e; }
+  }
+  return String(e&&e.message||e);
+}
+// Keep a rect inside the image and big enough to analyse; null if it isn't.
+function clampRoi(x,y,w,h,W,H,min){
+  x=Math.max(0,Math.round(x)); y=Math.max(0,Math.round(y));
+  w=Math.min(Math.round(w),W-x); h=Math.min(Math.round(h),H-y);
+  return (w>=(min||8)&&h>=(min||8))?{x,y,w,h}:null;
+}
+function drawImgTo(c){c.width=img.naturalWidth;c.height=img.naturalHeight;
+  c.getContext("2d").setTransform(1,0,0,1,0,0);c.getContext("2d").drawImage(img,0,0);}
+
+// Analysis must read the untouched photo. The visible canvases carry the
+// user's green box / traced outline / orange ruler box, and those strokes
+// land *inside* the ROI being analysed -- a saturated line along the ROI edge
+// skews the min/max normalisation enough to make detection fail outright
+// ("no dark blob found in the box"). Never imread a canvas we drew on.
+let _clean=null;
+function cleanSrc(){
+  if(!_clean)_clean=document.createElement("canvas");
+  _clean.width=img.naturalWidth;_clean.height=img.naturalHeight;
+  const g=_clean.getContext("2d");
+  g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,_clean.width,_clean.height);
+  g.drawImage(img,0,0);
+  return cv.imread(_clean);
+}
+const LW=c=>Math.max(3,c.width/300), DOT=c=>Math.max(4,c.width/250);
+
+// ---------- zoom / pan viewport ----------
+// The canvas backing store stays at the image's natural size; zooming is a
+// canvas transform, so every draw call and every hit-test still speaks image
+// pixels. Stroke widths get divided by the scale to stay constant on screen.
+const MAX_ZOOM=8;
+function newView(){return {x:0,y:0,s:1};}
+function clampView(v,c){
+  v.s=Math.min(MAX_ZOOM,Math.max(1,v.s));
+  v.x=Math.min(Math.max(0,v.x),Math.max(0,c.width -c.width /v.s));
+  v.y=Math.min(Math.max(0,v.y),Math.max(0,c.height-c.height/v.s));
+}
+function applyView(g,v){g.setTransform(v.s,0,0,v.s,-v.x*v.s,-v.y*v.s);}
+// zoom keeping the image point (ix,iy) pinned under the finger
+function zoomAt(v,c,factor,ix,iy){
+  const s0=v.s; v.s=Math.min(MAX_ZOOM,Math.max(1,v.s*factor));
+  v.x=ix-(ix-v.x)*s0/v.s; v.y=iy-(iy-v.y)*s0/v.s;
+  clampView(v,c);
+}
+// one-finger drag pans, two fingers pinch-zoom, a tap that didn't move calls
+// onTap with image coords. Returns nothing; wires itself to the canvas.
+function attachZoomPan(c,v,redraw,onTap){
+  const ptrs=new Map(); let moved=false,start=null,last=null,pinchDist=0;
+  const canvasPx=ev=>{const r=c.getBoundingClientRect();
+    return [(ev.clientX-r.left)*c.width/r.width,(ev.clientY-r.top)*c.height/r.height];};
+  c.addEventListener("pointerdown",ev=>{
+    c.setPointerCapture(ev.pointerId);
+    ptrs.set(ev.pointerId,{x:ev.clientX,y:ev.clientY});
+    if(ptrs.size===1){moved=false;start=last={x:ev.clientX,y:ev.clientY};}
+    else{moved=true;const p=[...ptrs.values()];
+      pinchDist=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);}
+    ev.preventDefault();
+  });
+  c.addEventListener("pointermove",ev=>{
+    if(!ptrs.has(ev.pointerId))return;
+    ptrs.set(ev.pointerId,{x:ev.clientX,y:ev.clientY});
+    const p=[...ptrs.values()];
+    if(p.length>=2){
+      const d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);
+      if(pinchDist>0&&d>0){
+        const r=c.getBoundingClientRect();
+        const mx=((p[0].x+p[1].x)/2-r.left)*c.width/r.width;
+        const my=((p[0].y+p[1].y)/2-r.top)*c.height/r.height;
+        zoomAt(v,c,d/pinchDist,mx/v.s+v.x,my/v.s+v.y);
+        redraw();
+      }
+      pinchDist=d;
+    }else if(last){
+      if(!moved&&Math.hypot(ev.clientX-start.x,ev.clientY-start.y)>8)moved=true;
+      if(moved){
+        const r=c.getBoundingClientRect();
+        v.x-=(ev.clientX-last.x)*c.width /r.width /v.s;
+        v.y-=(ev.clientY-last.y)*c.height/r.height/v.s;
+        clampView(v,c);redraw();
+      }
+      last={x:ev.clientX,y:ev.clientY};
+    }
+    ev.preventDefault();
+  });
+  const end=ev=>{
+    if(!ptrs.has(ev.pointerId))return;
+    if(ptrs.size===1&&!moved&&onTap)onTap(pos(c,ev,v));
+    ptrs.delete(ev.pointerId);
+    if(ptrs.size<2)pinchDist=0;
+    if(ptrs.size===0)last=null;
+    ev.preventDefault();
+  };
+  c.addEventListener("pointerup",end);
+  c.addEventListener("pointercancel",end);
+}
+
+// ---------- make any image canvas zoomable --------------------------------
+// Two flavours. Canvases that only display can pan with one finger. Canvases
+// where one finger DRAWS a box (lesion, ruler) get pinch-to-zoom and the
+// buttons instead, and their drawing handler stands down while two fingers are
+// down -- otherwise a pinch would drag a box across the photo.
+const zoomViews={}, zoomRedraws={}, zoomLabels={};
+// drawImgTo() resizes the canvas, which wipes any transform, so the view has
+// to go back to fit whenever a stage redraws from scratch
+function resetView(id){const v=zoomViews[id]; if(v){v.x=v.y=0;v.s=1;}}
+
+function addZoomRow(canvasId){
+  const c=$(canvasId), v=zoomViews[canvasId];
+  const row=document.createElement("div"); row.className="zoomrow";
+  const mk=(t,st)=>{const b=document.createElement("button");b.className="secondary";
+    b.textContent=t; if(st)b.setAttribute("style",st); return b;};
+  const minus=mk("−"), plus=mk("+"), fit=mk("Fit","width:auto;padding:8px 12px;font-size:13px");
+  const lab=document.createElement("span"); lab.className="zoomlvl"; lab.textContent="1.0×";
+  row.append(minus,lab,plus,fit);
+  c.parentNode.insertBefore(row,c.nextSibling);
+  zoomLabels[canvasId]=lab;
+  const zoom=f=>{zoomAt(v,c,f,v.x+c.width/v.s/2,v.y+c.height/v.s/2);zoomRedraws[canvasId]();};
+  minus.onclick=()=>zoom(1/1.6);
+  plus.onclick=()=>zoom(1.6);
+  fit.onclick=()=>{v.x=v.y=0;v.s=1;zoomRedraws[canvasId]();};
+}
+function setZoomLabel(canvasId){
+  const l=zoomLabels[canvasId];
+  if(l) l.textContent=zoomViews[canvasId].s.toFixed(1)+"×";
+}
+
+// display-only canvas: snapshot whatever has been drawn, then re-render that
+// snapshot under the view. Avoids re-running each stage's drawing code on zoom.
+function setupSnapshotZoom(canvasId){
+  const c=$(canvasId), v=zoomViews[canvasId]=newView();
+  const snap=document.createElement("canvas");
+  const redraw=()=>{
+    const g=c.getContext("2d");
+    g.setTransform(1,0,0,1,0,0); g.clearRect(0,0,c.width,c.height);
+    applyView(g,v);
+    if(snap.width) g.drawImage(snap,0,0);
+    setZoomLabel(canvasId);
+  };
+  zoomRedraws[canvasId]=redraw;
+  attachZoomPan(c,v,redraw,null);
+  addZoomRow(canvasId);
+  return ()=>{                       // call once the stage has drawn its content
+    snap.width=c.width; snap.height=c.height;
+    const sg=snap.getContext("2d");
+    sg.setTransform(1,0,0,1,0,0); sg.clearRect(0,0,snap.width,snap.height);
+    sg.drawImage(c,0,0);
+    v.x=v.y=0; v.s=1; redraw();
+  };
+}
+
+// box-drawing canvas: pinch + buttons only. Returns isMulti() so the drawing
+// handlers can ignore events while a pinch is in progress.
+function setupPinchZoom(canvasId,redraw,onPinchStart){
+  const c=$(canvasId), v=zoomViews[canvasId]=newView();
+  zoomRedraws[canvasId]=redraw;
+  const ptrs=new Map(); let dist=0;
+  c.addEventListener("pointerdown",ev=>{
+    ptrs.set(ev.pointerId,{x:ev.clientX,y:ev.clientY});
+    if(ptrs.size===2){const p=[...ptrs.values()];
+      dist=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);
+      // The first finger of a pinch already looked like the start of a box
+      // drag, so undo that before zooming.
+      if(onPinchStart) onPinchStart();}
+  });
+  c.addEventListener("pointermove",ev=>{
+    if(!ptrs.has(ev.pointerId))return;
+    ptrs.set(ev.pointerId,{x:ev.clientX,y:ev.clientY});
+    if(ptrs.size<2)return;
+    const p=[...ptrs.values()];
+    const d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);
+    if(dist>0&&d>0){
+      const r=c.getBoundingClientRect();
+      const mx=((p[0].x+p[1].x)/2-r.left)*c.width/r.width;
+      const my=((p[0].y+p[1].y)/2-r.top)*c.height/r.height;
+      zoomAt(v,c,d/dist,mx/v.s+v.x,my/v.s+v.y);
+      redraw();
+    }
+    dist=d;
+    ev.preventDefault();
+  });
+  const end=ev=>{ ptrs.delete(ev.pointerId); if(ptrs.size<2) dist=0; };
+  c.addEventListener("pointerup",end);
+  c.addEventListener("pointercancel",end);
+  addZoomRow(canvasId);
+  return ()=>ptrs.size>=2;
+}
+
+// ---------- where the image for a step comes from --------------------------
+// Every processing entry point goes through here. It used to also show the
+// library as a grid of thumbnails with a "Use this image" button; that is gone.
+// Images are looked at on the Image libraries screen instead, and a step now
+// always starts from a fresh camera shot, a file off the device, or the demo.
+let pickStep=null, pickThen=null;
+// Which of the three ways in are actually on offer: the camera only on a
+// touch device, the demo only when switched on in Settings.
+const SOURCE_WORDS={"pick-cam":"take a photo","pick-file":"add one from your device",
+                    "pick-demo":"try the demo"};
+const sourceButtons=()=>["pick-cam","pick-file","pick-demo"]
+  .map($).filter(b=>!b.classList.contains("hidden"));
+function sourceSentence(){
+  const w=sourceButtons().map(b=>SOURCE_WORDS[b.id]);
+  if(!w.length) return "No way to add an image is switched on — see Settings.";
+  const list=w.length===1?w[0]:w.slice(0,-1).join(", ")+" or "+w[w.length-1];
+  return list[0].toUpperCase()+list.slice(1)+".";
+}
+function openPicker(step,title,note,then){
+  pickStep=step; pickThen=then;
+  const srcs=sourceButtons();
+  // One way in is not a choice. Trigger it and never show this screen at all:
+  // the stage the user pressed the button on stays put, so cancelling the file
+  // dialog leaves them there rather than on a page with a single option.
+  if(srcs.length===1){ srcs[0].click(); return; }
+  $("pick-badge").textContent=title;
+  $("pick-instruct").textContent=note+sourceSentence();
+  show("stage-pick");
+}
+// the steps a lineage already carries -- "Standard" when it carries none
+function stepTags(steps){
+  const on=LIB_STEPS.filter(s=>steps&&steps[s[0]]);
+  return on.length ? on.map(s=>`<span class="tag">${s[1]}</span>`).join("")
+                   : `<span class="tag none">Standard — unprocessed</span>`;
+}
+
+// ---------- settings -------------------------------------------------------
+// Both default off: the automatic outline is right on most photos, and colour
+// calibration is a step for the card, not for a plain lesion photo. Turning
+// one on only makes its button appear -- the code behind it never went away.
+const SETTINGS_KEY="settings";
+const DEFAULTS={trace:false,colour:false,demo:false};
+function loadSettings(){
+  try{ return {...DEFAULTS,...JSON.parse(localStorage.getItem(SETTINGS_KEY)||"{}")}; }
+  catch(e){ return {...DEFAULTS}; }
+}
+let settings=loadSettings();
+function applySettings(){
+  $("ltrace").classList.toggle("hidden",!settings.trace);
+  $("reject-trace").classList.toggle("hidden",!settings.trace);
+  $("cc-open").classList.toggle("hidden",!settings.colour);
+  $("pick-demo").classList.toggle("hidden",!settings.demo);
+  $("set-trace").checked=settings.trace;
+  $("set-colour").checked=settings.colour;
+  $("set-demo").checked=settings.demo;
+}
+function setOption(k,v){
+  settings[k]=v;
+  try{ localStorage.setItem(SETTINGS_KEY,JSON.stringify(settings)); }catch(e){}
+  applySettings();
+}
+$("set-trace").onchange=e=>setOption("trace",e.target.checked);
+$("set-colour").onchange=e=>setOption("colour",e.target.checked);
+$("set-demo").onchange=e=>setOption("demo",e.target.checked);
+$("settings-open").onclick=()=>{ updateFailUI(); disarmReset(); show("stage-settings"); };
+$("set-back").onclick=()=>{ disarmReset(); show("stage-capture"); };
+// Wipe. Everything the app has put on this device lives in two places: the
+// image libraries in IndexedDB, and the measurements, failure log and these
+// switches in localStorage. None of it is recoverable afterwards, so the
+// confirmation counts what is about to go rather than asking in the abstract.
+// The confirmation is two taps on the page, not a confirm() dialog. Chrome
+// lets a page be muted permanently -- one tick of "don't let this page create
+// more dialogs" and confirm() returns false for the rest of the session, with
+// no way for the page to know. The button then does nothing at all, which is
+// exactly how this first went wrong.
+const RESET_HINT="Puts the app back to how it arrived: every image, "
+                +"every saved measurement and the log above, gone.";
+let resetArmed=false;
+function disarmReset(){
+  resetArmed=false;
+  $("set-reset").textContent="Reset everything";
+  $("reset-cancel").classList.add("hidden");
+  $("reset-hint").textContent=RESET_HINT;
+}
+$("reset-cancel").onclick=disarmReset;
+_disarms.push(disarmReset);        // and it disarms on any change of screen
+$("set-reset").onclick=async()=>{
+  if(!resetArmed){
+    const imgs=(await libAll("originals")).length;
+    const meas=loadResults().length;
+    const fails=JSON.parse(localStorage.getItem("faillog")||"[]").length;
+    resetArmed=true;
+    $("set-reset").textContent="Yes — delete it all";
+    $("reset-cancel").classList.remove("hidden");
+    $("reset-hint").textContent=
+      `About to delete ${imgs} image${imgs===1?"":"s"} in the libraries, `
+      +`${meas} saved measurement${meas===1?"":"s"}, `
+      +`${fails} logged failure${fails===1?"":"s"}, and put the switches above `
+      +`back to their defaults. This cannot be undone — tap again to confirm.`;
+    return;
+  }
+  try{
+    await libClearAll();
+    localStorage.removeItem(RESULTS_KEY);
+    localStorage.removeItem("faillog");
+    localStorage.removeItem(SETTINGS_KEY);
+  }catch(e){ setStatus("reset failed: "+e); return; }
+  // every id and selection now points at something that is gone
+  currentLibId=null; lastSavedId=null; gsel=[]; libSel=null;
+  settings={...DEFAULTS};
+  applySettings(); updateFailUI(); disarmReset();
+  show("stage-capture");            // refreshes the menu's counts on the way in
+  setStatus("Everything cleared.");
+};
+// Abandons whatever stage is open. Nothing is saved until a measurement
+// finishes, so the only loss is work in progress on this screen.
+$("home").onclick=()=>show("stage-capture");
+
+// import: straight into the step, since a fresh image can't already have it
+const onPicked=async e=>{
+  const f=e.target.files[0]; if(!f) return;
+  e.target.value="";
+  show("spinner");
+  try{ const rec=await libImport(f,f.name); await usePicked(rec.id); }
+  catch(err){ setStatus("couldn't read that image: "+err); show("stage-pick"); }
+};
+$("file").addEventListener("change",onPicked);
+$("filepick").addEventListener("change",onPicked);
+// "Take a photo" goes through <input capture>, which only means anything on a
+// phone or tablet. On a desktop it either does nothing or offers a webcam that
+// cannot be pointed at skin, so the button is hidden there and "From device"
+// carries the whole job. userAgentData.mobile is the direct answer where the
+// browser has it; elsewhere fall back to a device that both has a coarse
+// pointer and reports touch points, which desktops do not.
+const IS_MOBILE = (navigator.userAgentData && typeof navigator.userAgentData.mobile==="boolean")
+  ? navigator.userAgentData.mobile
+  : (matchMedia("(pointer:coarse)").matches && navigator.maxTouchPoints>0);
+$("pick-cam").classList.toggle("hidden",!IS_MOBILE);
+$("pick-cam").onclick=()=>$("file").click();
+$("pick-file").onclick=()=>$("filepick").click();
+$("pick-demo").onclick=async()=>{
+  show("spinner");
+  try{
+    const b=await (await fetch("half.jpg")).blob();
+    const rec=await libImport(b,"demo:half.jpg");
+    await usePicked(rec.id);
+  }catch(err){ setStatus("couldn't load the demo photo: "+err); show("stage-pick"); }
+};
+
+// Hand the chosen lineage to the step. The pixels come from libWorkBlob, which
+// is the processed working copy when there is one -- so a step applied after
+// colour correction reads the corrected image, never the annotated preview.
+let currentLibId=null;
+async function usePicked(id){
+  show("spinner");
+  const [blob,o]=await Promise.all([libWorkBlob(id),libGet("originals",id)]);
+  if(!blob){ setStatus("that image is no longer in the library"); show("stage-pick"); return; }
+  currentLibId=id; imgName=o?o.name:"(photo)";
+  const im=await libBlobToImage(blob);
+  pickThen(im);
+}
+
+const pickForMeasure=()=>openPicker("area","Measure a lesion","",startMeasure);
+const pickForColour=()=>openPicker("colour","Colour calibration",
+  "The photo needs the card's colour strips in it. ",startColour);
+$("go-measure").onclick=pickForMeasure;
+$("cc-open").onclick=pickForColour;
+
+function startMeasure(im){
+  img=im; lbox=null; lesion=null;
+  drawImgTo($("canvas")); resetView("canvas"); redrawL();
+  $("detect").disabled=true; boxInstruct(); show("stage-box");
+}
+
+// ---------- stage 1: lesion box ----------
+let lbox=null,ldrag=false;
+function redrawL(){const c=$("canvas"),g=c.getContext("2d"),v=zoomViews["canvas"];
+  g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,c.width,c.height);
+  applyView(g,v);g.drawImage(img,0,0);
+  if(lbox){g.strokeStyle="#00e676";g.lineWidth=LW(c)/v.s;
+    g.strokeRect(lbox[0],lbox[1],lbox[2]-lbox[0],lbox[3]-lbox[1]);}
+  setZoomLabel("canvas");}
+let lboxPrev=null;            // box as it was before the current drag began
+const boxMulti=setupPinchZoom("canvas",redrawL,()=>{
+  ldrag=false; lbox=lboxPrev; redrawL(); boxInstruct();
+  $("detect").disabled=!(lbox&&Math.abs(lbox[2]-lbox[0])>10&&Math.abs(lbox[3]-lbox[1])>10);
+});
+const lview=zoomViews["canvas"];
+function boxInstruct(){
+  const big=lbox&&Math.abs(lbox[2]-lbox[0])>10&&Math.abs(lbox[3]-lbox[1])>10;
+  $("box-instruct").textContent = big
+    ? "Box drawn — tap “Detect lesion”. Drag again to redraw it."
+    : "Drag your finger across the photo to draw a box around the lesion.";}
+$("canvas").addEventListener("pointerdown",ev=>{if(boxMulti()){ldrag=false;return;}
+  lboxPrev=lbox?lbox.slice():null;
+  const[x,y]=pos($("canvas"),ev,lview);lbox=[x,y,x,y];ldrag=true;ev.preventDefault();});
+$("canvas").addEventListener("pointermove",ev=>{if(boxMulti()){ldrag=false;return;}
+  if(!ldrag)return;const[x,y]=pos($("canvas"),ev,lview);lbox[2]=x;lbox[3]=y;redrawL();ev.preventDefault();});
+$("canvas").addEventListener("pointerup",()=>{ldrag=false;if(lbox&&Math.abs(lbox[2]-lbox[0])>10&&Math.abs(lbox[3]-lbox[1])>10)$("detect").disabled=false;boxInstruct();});
+$("rebox").onclick=pickForMeasure;
+$("detect").onclick=()=>defer(()=>{
+  const src=cleanSrc();
+  const box=clampRoi(Math.min(lbox[0],lbox[2]),Math.min(lbox[1],lbox[3]),
+                     Math.abs(lbox[2]-lbox[0]),Math.abs(lbox[3]-lbox[1]),
+                     src.cols,src.rows,16);
+  if(!box){src.delete();
+    setStatus("That box is too small — drag a larger one around the lesion.",true);
+    show("stage-box");return;}
+  const {x,y,w,h}=box;
+  const bg=Math.max(31,Math.floor(Math.min(w,h)*0.9))|1;
+  let res=null; try{res=segmentLesion(src,box,bg);}
+  catch(e){window.__segReason="error: "+cvErr(e);setStatus("err "+cvErr(e));}
+  src.delete();
+  if(!res){
+    logFailure([x,y,w,h]);
+    setStatus("Couldn't detect the lesion ("+(window.__segReason||"?")+")\nbox="
+      +JSON.stringify([x,y,w,h])+"\n(logged for analysis)\n"
+      +"Draw a tighter box around the lesion and try again."
+      +(settings.trace?"\nOr tap 'Trace myself' to draw the border by hand.":""),true);
+    show("stage-box");return;
+  }
+  lesion=res; showReview();
+});
+
+// ---------- failure log (localStorage, for offline analysis) ----------
+// Ruler problems used to leave no trace at all, so diagnosing one meant
+// guessing from a photo. Same log as lesion failures, tagged by kind.
+function logRulerFailure(kind){
+  try{
+    const log=JSON.parse(localStorage.getItem("faillog")||"[]");
+    log.push({t:new Date().toISOString(), kind:kind||"ruler", img:imgName,
+              imgW:img.naturalWidth, imgH:img.naturalHeight,
+              lesionBBox:lesion?lesion.bbox.map(Math.round):null,
+              diag:window.__genDiag||null});
+    while(log.length>50) log.shift();
+    localStorage.setItem("faillog",JSON.stringify(log));
+  }catch(e){}
+  updateFailUI();
+}
+function logFailure(box){
+  try{
+    const log=JSON.parse(localStorage.getItem("faillog")||"[]");
+    log.push({t:new Date().toISOString(), kind:"lesion", img:imgName,
+              imgW:img.naturalWidth, imgH:img.naturalHeight,
+              box, reason:window.__segReason||"?",
+              trail:window.__segTrail||[]});
+    while(log.length>50) log.shift();
+    localStorage.setItem("faillog",JSON.stringify(log));
+  }catch(e){}
+  updateFailUI();
+}
+function updateFailUI(){
+  const n=JSON.parse(localStorage.getItem("faillog")||"[]").length;
+  // the row lives on the settings page now, so it always shows -- an empty log
+  // is worth stating, and the two buttons simply have nothing to act on
+  $("faillog-count").textContent=n;
+  $("faillog-copy").disabled=n===0;
+  $("faillog-clear").disabled=n===0;
+}
+$("faillog-copy").onclick=async()=>{
+  const txt=localStorage.getItem("faillog")||"[]";
+  try{
+    await navigator.clipboard.writeText(txt);
+    setStatus("Failure log copied — paste it to Claude.");
+  }catch(e){
+    // prompt() is a dialog too, and just as mutable. Put the log on the page
+    // and select it, so a copy is one keystroke away.
+    setStatus("Couldn't reach the clipboard. The log is below — it is selected, "
+             +"so copy it now.\n\n"+txt);
+    const r=document.createRange(); r.selectNodeContents($("status"));
+    const sel=getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  }
+};
+$("faillog-clear").onclick=()=>{ localStorage.removeItem("faillog"); updateFailUI(); };
+
+// ---------- manual: trace the lesion border ----------
+let lmpts=[];
+const lmview=newView();   // mutated, never reassigned: attachZoomPan holds this reference
+function startLManual(){drawImgTo($("lmcanvas"));lmpts=[];
+  lmview.x=lmview.y=0;lmview.s=1;
+  $("lm-done").disabled=true;show("stage-lmanual");redrawLM();}
+$("ltrace").onclick=()=>startLManual();
+function redrawLM(){const c=$("lmcanvas"),g=c.getContext("2d");
+  g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,c.width,c.height);
+  applyView(g,lmview);g.drawImage(img,0,0);
+  const lw=LW(c)/lmview.s, dot=DOT(c)/lmview.s;
+  g.fillStyle="#00e676";g.strokeStyle="#00e676";g.lineWidth=lw;
+  if(lmpts.length>1){g.beginPath();g.moveTo(lmpts[0][0],lmpts[0][1]);
+    lmpts.slice(1).forEach(p=>g.lineTo(p[0],p[1]));g.stroke();}
+  lmpts.forEach(p=>{g.beginPath();g.arc(p[0],p[1],dot,0,7);g.fill();});
+  $("lm-zoomlvl").textContent=lmview.s.toFixed(1)+"×";
+  $("lm-instruct").textContent = lmpts.length===0
+    ? "Zoom in first, then tap points around the edge of the lesion."
+    : lmpts.length<3 ? `${lmpts.length} point(s) — at least 3 needed.`
+                     : `${lmpts.length} points — tap Done when the outline is closed.`;}
+attachZoomPan($("lmcanvas"),lmview,redrawLM,p=>{
+  lmpts.push(p);$("lm-done").disabled=lmpts.length<3;redrawLM();});
+const lmZoom=f=>{const c=$("lmcanvas");
+  zoomAt(lmview,c,f,lmview.x+c.width/lmview.s/2,lmview.y+c.height/lmview.s/2);redrawLM();};
+$("lm-zoomin").onclick=()=>lmZoom(1.6);
+$("lm-zoomout").onclick=()=>lmZoom(1/1.6);
+$("lm-zoomreset").onclick=()=>{lmview.x=lmview.y=0;lmview.s=1;redrawLM();};
+$("lm-undo").onclick=()=>{lmpts.pop();$("lm-done").disabled=lmpts.length<3;redrawLM();};
+// back to drawing the box, discarding the half-finished trace
+$("lm-back").onclick=()=>{drawImgTo($("canvas"));resetView("canvas");redrawL();boxInstruct();
+  $("detect").disabled=!(lbox&&Math.abs(lbox[2]-lbox[0])>10&&Math.abs(lbox[3]-lbox[1])>10);
+  show("stage-box");};
+$("lm-done").onclick=()=>{
+  const pts=lmpts.slice();
+  const area=polyArea(pts);
+  let sx=0,sy=0; pts.forEach(p=>{sx+=p[0];sy+=p[1];});
+  let mnx=1e9,mny=1e9,mxx=-1e9,mxy=-1e9;
+  pts.forEach(p=>{mnx=Math.min(mnx,p[0]);mny=Math.min(mny,p[1]);mxx=Math.max(mxx,p[0]);mxy=Math.max(mxy,p[1]);});
+  lesion={points:pts,areaPx:area,centroid:[Math.round(sx/pts.length),Math.round(sy/pts.length)],bbox:[mnx,mny,mxx-mnx,mxy-mny]};
+  showReview();
+};
+
+// ---------- lesion review ----------
+function drawLesion(g,c){g.strokeStyle="#00e676";g.lineWidth=LW(c);g.beginPath();
+  lesion.points.forEach((p,i)=>i?g.lineTo(p[0],p[1]):g.moveTo(p[0],p[1]));g.closePath();g.stroke();
+  g.fillStyle="#ff1744";g.beginPath();g.arc(lesion.centroid[0],lesion.centroid[1],DOT(c),0,7);g.fill();}
+const captureReviewZoom=setupSnapshotZoom("rcanvas");
+function showReview(){const c=$("rcanvas");drawImgTo(c);drawLesion(c.getContext("2d"),c);
+  captureReviewZoom();
+  libMark("lesion",renderOf(c,lesion.bbox),{meta:{areaPx:Math.round(lesion.areaPx)}});
+  show("stage-review");}
+$("reject").onclick=()=>{drawImgTo($("canvas"));lbox=null;resetView("canvas");redrawL();
+  $("detect").disabled=true;boxInstruct();show("stage-box");};
+// reject straight into tracing: the detector already had its go, so skip the
+$("accept").onclick=()=>defer(()=>{
+  const src=cleanSrc();
+  // One ruler path for every kind of ruler -- the app works out which detector
+  // fits instead of asking. The card detector runs first because it reads real
+  // centimetre ticks, so a hit settles the scale outright; the general detector
+  // is the wider net but measures only a pitch, which may still need "mm or
+  // cm?" confirming. Both run against the same src, which is why the decisions
+  // are all made below, after it has been freed exactly once.
+  let r=null,g=null,pair=null;
+  try{
+    const raw=belowLesionRoi(src.cols,src.rows,lesion.bbox);
+    const roi=clampRoi(raw.x,raw.y,raw.w,raw.h,src.cols,src.rows,32);
+    if(roi){ try{r=detectRuler(src,roi);}catch(e){setStatus("err "+cvErr(e));} }
+    if(r) pair=twoCmTicksNear(r.cmTicks,lesion.centroid[0]);
+    if(!pair){
+      const gr=nearLesionRoi(src.cols,src.rows,lesion.bbox);
+      const groi=clampRoi(gr.x,gr.y,gr.w,gr.h,src.cols,src.rows,32);
+      // pass the lesion box so the detector can refuse when the marks it found
+      // are on the lesion rather than on a ruler
+      if(groi){ try{g=detectGenericRuler(src,groi,lesion.bbox);}catch(e){setStatus("err "+cvErr(e));} }
+    }
+  } finally { src.delete(); }
+  if(pair){finalize(pair);return;}
+  if(g){showGenRuler(g);return;}
+  logRulerFailure("ruler-cascade");
+  // Carry the detector's own account on to whichever fallback comes next --
+  // "only 6 ticks on it" is something the user can act on; a bare "couldn't
+  // find the ruler" reads as though the ruler was never looked at.
+  const why=(window.__genDiag&&window.__genDiag.reason)||"";
+  if(r&&r.sharpness<BLUR_THRESHOLD){showBlurry(why);return;}
+  startRulerBox(why);                    // auto failed -> ask for a ruler box
+});
+
+// ---------- general ruler: confirm what the detected spacing means ----------
+// The run of marks is solid evidence of a scale, but pixels cannot say whether
+// the spacing is 1 mm or 1 cm -- so show what was found and let the user say.
+let genFound=null;
+const captureGenZoom=setupSnapshotZoom("gencanvas");
+function showGenRuler(g){
+  genFound=g;
+  const c=$("gencanvas");drawImgTo(c);const ctx=c.getContext("2d");
+  ctx.strokeStyle="#ffd54f";ctx.fillStyle="#ffd54f";ctx.lineWidth=LW(c);
+  g.ticks.forEach(t=>{ctx.beginPath();ctx.arc(t[0],t[1],DOT(c),0,7);ctx.fill();});
+  const a=g.ticks[0],b=g.ticks[g.ticks.length-1];
+  ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+  ctx.strokeStyle="#00e676";
+  ctx.strokeRect(g.roi.x,g.roi.y,g.roi.w,g.roi.h);
+  const known=!g.unitUnknown&&g.marksPerMajor;
+  $("gen-instruct").textContent = known
+    ? "Found the ruler and read its scale — check the marks look right."
+    : "Found evenly spaced marks — how far apart are they?";
+  $("gen-detail").textContent = known
+    ? `${g.count} marks, ${g.pxPerTick.toFixed(1)} px apart. Every ${g.marksPerMajor}th is a `
+      + `long one — that is 1 ${g.majorUnit} — so the small marks are ${g.minorName} `
+      + `⇒ ${g.pxPerCm.toFixed(0)} px/cm.`
+    : `${g.count} marks, ${g.pxPerTick.toFixed(2)} px apart`
+      + (g.minorPerMajor?` (a long mark every ${g.minorPerMajor} — could be half-centimetres)`:``)
+      + `. If they are millimetres that is ${(g.pxPerTick*10).toFixed(0)} px/cm; `
+      + `if centimetres, ${g.pxPerTick.toFixed(0)} px/cm.`;
+  // when the mark pattern settled the unit, one button confirms it
+  $("gen-mm").textContent = known ? "Use this scale" : "1 mm apart";
+  $("gen-cm").classList.toggle("hidden", !!known);
+  captureGenZoom();
+  show("stage-genruler");
+}
+const genUse=mmPerTick=>{
+  // pxPerCm is what the rest of the app calibrates with. When the long/short
+  // pattern identified the unit, use that directly instead of a chosen one --
+  // and prefer the scale measured AT the lesion: under perspective the pitch
+  // drifts across the frame, and the global figure biased area by 12% on one
+  // of the test photos.
+  const pxPerCm = mmPerTick==null
+    ? (genFound.pxPerCmAtLesion || genFound.pxPerCm)
+    : (genFound.pxPerTickAtLesion || genFound.pxPerTick)*(10/mmPerTick);
+  const a=genFound.ticks[0],b=genFound.ticks[genFound.ticks.length-1];
+  const spanCm=(genFound.count-1)*genFound.pxPerTick/pxPerCm;
+  finalize({pxPerCm,markers:[a,b],
+            spanLabel: spanCm>=1 ? `${spanCm.toFixed(1)} cm` : `${(spanCm*10).toFixed(0)} mm`});
+};
+$("gen-mm").onclick=()=>genUse(genFound&&!genFound.unitUnknown&&genFound.marksPerMajor?null:1);
+$("gen-cm").onclick=()=>genUse(10);
+$("gen-manual").onclick=()=>startTicks();
+
+// ---------- ruler box ----------
+let rbox=null,rdrag=false;
+// `why` is the detector's own account of what went wrong. Arriving here with
+// only the generic line reads as though the ruler was never looked at.
+function startRulerBox(why){drawImgTo($("rulercanvas"));rbox=null;resetView("rulercanvas");
+  $("rulerbox-hint").textContent = why
+    ? why+" Box the ruler to try a tighter area, or tap the marks."
+    : "Couldn't find the ruler automatically — box it, or tap the marks.";
+  redrawR();$("ruler-detect").disabled=true;show("stage-rulerbox");}
+function redrawR(){const c=$("rulercanvas"),g=c.getContext("2d"),v=zoomViews["rulercanvas"];
+  g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,c.width,c.height);
+  applyView(g,v);g.drawImage(img,0,0);
+  if(rbox){g.strokeStyle="#ff9100";g.lineWidth=LW(c)/v.s;
+    g.strokeRect(rbox[0],rbox[1],rbox[2]-rbox[0],rbox[3]-rbox[1]);}
+  setZoomLabel("rulercanvas");}
+let rboxPrev=null;
+const rulerMulti=setupPinchZoom("rulercanvas",redrawR,()=>{
+  rdrag=false; rbox=rboxPrev; redrawR();
+  $("ruler-detect").disabled=!(rbox&&Math.abs(rbox[2]-rbox[0])>15&&Math.abs(rbox[3]-rbox[1])>15);
+});
+const rview=zoomViews["rulercanvas"];
+$("rulercanvas").addEventListener("pointerdown",ev=>{if(rulerMulti()){rdrag=false;return;}
+  rboxPrev=rbox?rbox.slice():null;
+  const[x,y]=pos($("rulercanvas"),ev,rview);rbox=[x,y,x,y];rdrag=true;ev.preventDefault();});
+$("rulercanvas").addEventListener("pointermove",ev=>{if(rulerMulti()){rdrag=false;return;}
+  if(!rdrag)return;const[x,y]=pos($("rulercanvas"),ev,rview);rbox[2]=x;rbox[3]=y;redrawR();ev.preventDefault();});
+$("rulercanvas").addEventListener("pointerup",()=>{rdrag=false;if(rbox&&Math.abs(rbox[2]-rbox[0])>15&&Math.abs(rbox[3]-rbox[1])>15)$("ruler-detect").disabled=false;});
+$("ruler-tap").onclick=()=>startTicks();
+// every ruler-stage "back" returns to the lesion result, which is the last
+// thing the user actually approved
+$("rulerbox-back").onclick=()=>showReview();
+$("ticks-back").onclick=()=>showReview();
+$("blurry-back").onclick=()=>showReview();
+$("gen-back").onclick=()=>showReview();
+$("ruler-detect").onclick=()=>defer(()=>{
+  const src=cleanSrc();
+  const roi=clampRoi(Math.min(rbox[0],rbox[2]),Math.min(rbox[1],rbox[3]),
+                     Math.abs(rbox[2]-rbox[0]),Math.abs(rbox[3]-rbox[1]),
+                     src.cols,src.rows,32);
+  if(!roi){src.delete();
+    setStatus("That box is too small — draw a larger one around the ruler.",true);
+    show("stage-rulerbox");return;}
+  // the same cascade as the automatic path, confined to the box just drawn
+  let r=null,g=null,pair=null;
+  try{
+    try{r=detectRuler(src,roi);}catch(e){setStatus("err "+cvErr(e));}
+    if(r) pair=twoCmTicksNear(r.cmTicks,lesion.centroid[0]);
+    if(!pair){ try{g=detectGenericRuler(src,roi,lesion.bbox);}catch(e){setStatus("err "+cvErr(e));} }
+  } finally { src.delete(); }
+  if(pair){finalize(pair);return;}
+  if(g){showGenRuler(g);return;}
+  const bwhy=(window.__genDiag&&window.__genDiag.reason)||"";
+  if(r&&r.sharpness<BLUR_THRESHOLD){showBlurry(bwhy);return;}
+  startTicks(bwhy?bwhy+" Tap two marks 1 cm apart instead.":undefined);
+});
+
+// ---------- tap two 1 cm marks ----------
+let tpts=[];
+const tkview=newView();    // mutated, never reassigned (attachZoomPan holds it)
+// `why` explains what automatic detection did before landing the user here --
+// arriving on this screen with no explanation reads like the app just ignored
+// the ruler option.
+function startTicks(why){
+  const w=$("ticks-why");
+  w.textContent=why||"";
+  w.classList.toggle("hidden",!why);
+  drawImgTo($("tickcanvas"));tpts=[];
+  tkview.x=tkview.y=0;tkview.s=1;
+  $("ticks-done").disabled=true;show("stage-ticks");redrawT();}
+function redrawT(){const c=$("tickcanvas"),g=c.getContext("2d");
+  g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,c.width,c.height);
+  applyView(g,tkview);g.drawImage(img,0,0);
+  const lw=LW(c)/tkview.s, dot=DOT(c)/tkview.s;
+  g.fillStyle="#00e5ff";g.strokeStyle="#00e5ff";g.lineWidth=lw;
+  tpts.forEach(p=>{g.beginPath();g.arc(p[0],p[1],dot,0,7);g.fill();});
+  if(tpts.length===2){g.beginPath();g.moveTo(tpts[0][0],tpts[0][1]);g.lineTo(tpts[1][0],tpts[1][1]);g.stroke();}
+  $("tk-zoomlvl").textContent=tkview.s.toFixed(1)+"×";
+  $("tick-instruct").textContent = tpts.length===0
+    ? "Zoom in, then tap two marks exactly 1 cm apart."
+    : tpts.length===1 ? "Now tap the next cm mark (1 cm from the first)."
+                      : "Two marks set — tap “Use these”, or tap again to restart.";}
+attachZoomPan($("tickcanvas"),tkview,redrawT,p=>{
+  if(tpts.length>=2)tpts.length=0;
+  tpts.push(p);$("ticks-done").disabled=tpts.length!==2;redrawT();});
+const tkZoom=f=>{const c=$("tickcanvas");
+  zoomAt(tkview,c,f,tkview.x+c.width/tkview.s/2,tkview.y+c.height/tkview.s/2);redrawT();};
+$("tk-zoomin").onclick=()=>tkZoom(1.6);
+$("tk-zoomout").onclick=()=>tkZoom(1/1.6);
+$("tk-zoomreset").onclick=()=>{tkview.x=tkview.y=0;tkview.s=1;redrawT();};
+$("ticks-undo").onclick=()=>{tpts.pop();$("ticks-done").disabled=tpts.length!==2;redrawT();};
+$("ticks-done").onclick=()=>{const d=Math.hypot(tpts[1][0]-tpts[0][0],tpts[1][1]-tpts[0][1]);
+  finalize({pxPerCm:d,markers:[tpts[0],tpts[1]]});};
+
+// ---------- blurry ----------
+// Low sharpness in the ruler area says the markings carry little detail. It
+// does NOT say the photo is out of focus: a sharp but small crop measures just
+// as low (rl3 is pin-sharp and lands here), and telling someone to retake a
+// good photo is the one unhelpful answer. State the evidence, offer both
+// causes, and pass on whatever the detector itself reported.
+function showBlurry(why){$("blurry-msg").textContent=
+  "The ruler markings are too faint to read automatically. "+(why?why+" ":"")+
+  "If the photo is out of focus, retaking it is best; if the ruler is just small "+
+  "in frame, get closer. You can also box the ruler, or tap the two 1 cm marks yourself.";
+  show("stage-blurry");}
+$("blurry-retake").onclick=pickForMeasure;
+$("blurry-tap").onclick=()=>startTicks();
+// Blur is measured on the whole auto-detected ruler region, so a tighter box
+// round just the markings can still be sharp enough to read -- worth offering
+// before making the user retake the photo.
+$("blurry-box").onclick=()=>startRulerBox();
+
+// ---------- widest diameter (max caliper / Feret) --------------------------
+// The longest straight line across the lesion -- the clinical sense of
+// "diameter", and what the ABCDE 6 mm rule of thumb refers to. Both endpoints
+// of the longest chord are always convex-hull vertices, so hull first and the
+// brute-force pass is over a handful of points instead of the whole outline.
+function convexHull(pts){
+  const p=pts.map(q=>[q[0],q[1]]).sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+  if(p.length<3) return p;
+  const cross=(o,a,b)=>(a[0]-o[0])*(b[1]-o[1])-(a[1]-o[1])*(b[0]-o[0]);
+  const lo=[]; for(const q of p){ while(lo.length>=2&&cross(lo[lo.length-2],lo[lo.length-1],q)<=0)lo.pop(); lo.push(q); }
+  const up=[]; for(let i=p.length-1;i>=0;i--){ const q=p[i];
+    while(up.length>=2&&cross(up[up.length-2],up[up.length-1],q)<=0)up.pop(); up.push(q); }
+  lo.pop(); up.pop(); return lo.concat(up);
+}
+function widestDiameter(pts){            // -> {px, a, b}
+  const h=convexHull(pts);
+  let best=0,a=h[0]||[0,0],b=h[0]||[0,0];
+  for(let i=0;i<h.length;i++) for(let j=i+1;j<h.length;j++){
+    const d=Math.hypot(h[i][0]-h[j][0],h[i][1]-h[j][1]);
+    if(d>best){best=d;a=h[i];b=h[j];}
+  }
+  return {px:best,a,b};
+}
+
+// ---------- finalize (draw everything + mm) ----------
+const captureFinalZoom=setupSnapshotZoom("fcanvas");
+function finalize(p){
+  const c=$("fcanvas");drawImgTo(c);const g=c.getContext("2d");
+  const mm=10/p.pxPerCm, areaMm2=lesion.areaPx*mm*mm;
+  const wide=widestDiameter(lesion.points);
+  const dia=wide.px*mm;                                   // widest across the lesion
+  const equivDia=2*Math.sqrt(lesion.areaPx/Math.PI)*mm;   // equal-area circle, for reference
+  drawLesion(g,c);
+  // show which axis was measured, so the number is checkable against the photo
+  g.strokeStyle="#ffd54f";g.lineWidth=LW(c);
+  g.beginPath();g.moveTo(wide.a[0],wide.a[1]);g.lineTo(wide.b[0],wide.b[1]);g.stroke();
+  // Label centred over the lesion, on two lines. Centring keeps it inside the
+  // comparison crop (which is centred on the lesion), and two short lines fit
+  // where one long one ran past the crop edge and got cut.
+  const fs=Math.max(20,c.width/45);
+  g.fillStyle="#00e676";g.font=`bold ${fs}px system-ui`;
+  g.textAlign="center";
+  const labelX=lesion.centroid[0];
+  const labelBase=Math.max(fs*2.4,lesion.bbox[1]-fs*0.5);
+  g.fillText(`${areaMm2.toFixed(1)} mm²`,labelX,labelBase-fs*1.15);
+  g.fillText(`D ${dia.toFixed(1)} mm`,labelX,labelBase);
+  g.textAlign="left";
+  // draw the two cm-tick markers + 1 cm segment
+  const m = p.markers || [ tickCenter(p.a), tickCenter(p.b) ];
+  g.fillStyle="#00e5ff";g.strokeStyle="#00e5ff";g.lineWidth=LW(c);
+  m.forEach(pt=>{g.beginPath();g.arc(pt[0],pt[1],DOT(c),0,7);g.fill();});
+  g.beginPath();g.moveTo(m[0][0],m[0][1]);g.lineTo(m[1][0],m[1][1]);g.stroke();
+  g.fillText(p.spanLabel||"1 cm",Math.min(m[0][0],m[1][0]),Math.min(m[0][1],m[1][1])-14);
+  // crop last, so the centred label is part of the comparison image
+  const crop=lesionCrop(p.pxPerCm,dia);
+  $("final-method").textContent="Result — ruler-calibrated";
+  $("fstats").innerHTML=`Diameter (widest): <b>${dia.toFixed(1)} mm</b><br>Area: <b>${areaMm2.toFixed(1)} mm²</b><br>`+
+    `Equivalent circle: ${equivDia.toFixed(1)} mm<br>`+
+    `Scale: ${p.pxPerCm.toFixed(0)} px/cm<br>Lesion area: ${Math.round(lesion.areaPx).toLocaleString()} px`;
+  const saved=storeResult(areaMm2,dia,p.pxPerCm,crop);
+  $("fstats").innerHTML+=saved
+    ? `<br><span class="steady">Saved for comparison.</span>`
+    : `<br><span class="grew">Couldn't save (storage full).</span>`;
+  captureFinalZoom();   // after the thumbnail and crop have been read off it
+  // Reaching here means a scale was established and a size reported. The ruler
+  // shot has to span the lesion AND the two cm markers, which can sit a long
+  // way below it; the area shot is the lesion crop already built above.
+  const mBox=[Math.min(m[0][0],m[1][0]),Math.min(m[0][1],m[1][1]),
+              Math.abs(m[1][0]-m[0][0])||1,Math.abs(m[1][1]-m[0][1])||1];
+  libMark("ruler",renderOf(c,unionBox(lesion.bbox,mBox)),
+          {meta:{pxPerCm:+p.pxPerCm.toFixed(1)}});
+  libMark("area",crop.data,
+          {meta:{areaMm2:+areaMm2.toFixed(1), diaMm:+dia.toFixed(1),
+                 equivDiaMm:+equivDia.toFixed(1), cropMm:crop.mm}});
+  show("stage-final");
+}
+
+// ---------- saved results (for comparing the same lesion over time) --------
+// The annotated result canvas is full-resolution, far too big for
+// localStorage, so each record keeps a downscaled JPEG of the *annotated*
+// image plus its measurements. Oldest records are dropped when the quota is
+// hit rather than losing the save outright.
+const RESULTS_KEY="results", MAX_RESULTS=12, THUMB_MAX=700;
+// id of the record written by the current run, so rejecting the result can
+// take it back out again -- a rejected measurement must not linger in the
+// comparison history
+let lastSavedId=null;
+// Comparison crop: a fixed *physical* window centred on the lesion, rendered
+// at a fixed pixel size. Cropping by lesion size instead would normalise the
+// growth away, and cropping by pixels would make the photo taken closer look
+// bigger -- with a fixed mm window, two crops are directly comparable and a
+// real size change is visible side by side.
+const CROP_MM=25, CROP_PX=560;
+function lesionCrop(pxPerCm,widestMm){
+  const c=$("fcanvas");
+  // widen the window if the lesion would not comfortably fit in 25 mm
+  const mmWin=Math.max(CROP_MM,widestMm*1.6);
+  const halfPx=(mmWin/2)*(pxPerCm/10);
+  const cx=lesion.centroid[0], cy=lesion.centroid[1];
+  const t=document.createElement("canvas"); t.width=t.height=CROP_PX;
+  const g=t.getContext("2d");
+  g.fillStyle="#000"; g.fillRect(0,0,CROP_PX,CROP_PX);   // pad if near an edge
+  g.drawImage(c, cx-halfPx, cy-halfPx, halfPx*2, halfPx*2, 0, 0, CROP_PX, CROP_PX);
+  return {data:t.toDataURL("image/jpeg",0.75), mm:+mmWin.toFixed(1)};
+}
+function loadResults(){try{return JSON.parse(localStorage.getItem(RESULTS_KEY)||"[]");}catch(e){return [];}}
+function writeResults(list){
+  let l=list.slice(-MAX_RESULTS);
+  for(;;){
+    try{ localStorage.setItem(RESULTS_KEY,JSON.stringify(l)); return true; }
+    catch(e){ if(l.length<=1) return false; l=l.slice(1); }
+  }
+}
+function storeResult(areaMm2,dia,pxPerCm,crop){
+  const c=$("fcanvas");
+  const s=Math.min(1,THUMB_MAX/Math.max(c.width,c.height));
+  const t=document.createElement("canvas");
+  t.width=Math.round(c.width*s); t.height=Math.round(c.height*s);
+  t.getContext("2d").drawImage(c,0,0,t.width,t.height);
+  const list=loadResults();
+  lastSavedId=Date.now();
+  list.push({ id:lastSavedId, t:new Date().toISOString(), name:imgName,
+              areaMm2:+areaMm2.toFixed(1), diaMm:+dia.toFixed(1),
+              // how diaMm was measured. Records written before the switch have
+              // no dm and hold an equal-area-circle diameter, which reads
+              // smaller -- comparing across the two would fake a jump.
+              dm:"widest",
+              pxPerCm:+pxPerCm.toFixed(1), areaPx:Math.round(lesion.areaPx),
+              crop:crop.data, cropMm:crop.mm,
+              img:t.toDataURL("image/jpeg",0.75) });
+  return writeResults(list);
+}
+const fmtDate=iso=>{const d=new Date(iso);
+  return d.toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"});};
+// Always show this button. Hiding it at zero made the feature look missing --
+// and it reads as missing on a URL where nothing is saved yet, because browser
+// storage is per-origin: measurements taken on the LAN test address are not
+// visible on the published site, and vice versa.
+function updateCompareUI(){
+  const n=loadResults().length;
+  const b=$("compare-open");
+  b.classList.remove("hidden");
+  b.disabled=n<2;
+  b.textContent = n>=2 ? `Compare over time (${n} saved)`
+                : n===1 ? "Compare over time — 1 saved, needs 2"
+                        : "Compare over time — measure a lesion first";
+}
+
+// ---------- gallery: pick two or more saved results ----------
+let gsel=[];
+function renderGallery(){
+  const list=loadResults().slice().sort((a,b)=>new Date(b.t)-new Date(a.t));
+  const g=$("gallery");
+  g.innerHTML = list.length ? "" : '<p class="hint">No saved measurements yet.</p>';
+  list.forEach(r=>{
+    const i=gsel.indexOf(r.id);
+    const d=document.createElement("div");
+    d.className="gitem"+(i>=0?" sel":"");
+    d.innerHTML=`<img src="${r.img}" alt="">
+      <div class="meta">${fmtDate(r.t)}<br><b>${r.diaMm} mm</b> · ${r.areaMm2} mm²
+      ${i>=0?`<div class="pick">selected #${i+1}</div>`:""}</div>`;
+    // Any number of picks, not just two: tapping adds, tapping again removes.
+    // The old version dropped the oldest pick once two were held, which made a
+    // third tap look like the app had lost one.
+    d.onclick=()=>{
+      const at=gsel.indexOf(r.id);
+      if(at>=0) gsel.splice(at,1);
+      else gsel.push(r.id);
+      renderGallery();
+    };
+    g.appendChild(d);
+  });
+  disarmGalDel();                       // the selection just changed under it
+  $("gal-go").disabled=gsel.length<2;
+  $("gal-go").textContent = gsel.length>2 ? `Compare ${gsel.length}` : "Compare";
+  $("gal-del").disabled=gsel.length===0;
+  $("gal-instruct").textContent = gsel.length===0 ? "Pick two or more saved measurements to compare."
+    : gsel.length===1 ? "Pick at least one more."
+    : `${gsel.length} picked — tap Compare.`;
+}
+$("compare-open").onclick=()=>{gsel=[];renderGallery();show("stage-gallery");};
+$("gal-back").onclick=()=>show("stage-capture");
+const disarmGalDel=armable($("gal-del"),
+  ()=>`Delete ${gsel.length} — tap again`,
+  ()=>{
+    writeResults(loadResults().filter(r=>!gsel.includes(r.id)));
+    gsel=[];renderGallery();updateCompareUI();
+  });
+$("cmp-back").onclick=()=>{renderGallery();show("stage-gallery");};
+
+$("reject-trace").onclick=()=>{lesion=null;startLManual();};
+
+// ---------- browsing the two libraries ------------------------------------
+// Standard: the images as imported, untouched by any step.
+// Processed: the same images as they stand after every step applied to them.
+// A step's picture has to be readable at gallery size. Scaling a 3000 px photo
+// down to a thumbnail turns a lesion outline into two or three pixels, which is
+// why every step could be ticked and the library still showed nothing. So a
+// render is cropped to the region the step actually annotated, then scaled.
+const RENDER_PX=760;
+function renderOf(c,box){                     // box = [x,y,w,h] in canvas pixels
+  let sx=0,sy=0,sw=c.width,sh=c.height;
+  if(box){
+    // Pad around the annotated region but keep its shape -- squaring the crop
+    // off would blow a wide band like the colour strips back up to the whole
+    // frame, which is the thing making the annotation invisible.
+    sw=box[2]*1.9; sh=box[3]*1.9;
+    const minSide=Math.max(sw,sh)*0.35;         // context on a very thin band
+    sw=Math.max(sw,minSide); sh=Math.max(sh,minSide);
+    sx=box[0]+box[2]/2-sw/2; sy=box[1]+box[3]/2-sh/2;
+  }
+  const s=Math.min(1,RENDER_PX/Math.max(sw,sh));
+  const t=document.createElement("canvas");
+  t.width=Math.max(1,Math.round(sw*s)); t.height=Math.max(1,Math.round(sh*s));
+  const g=t.getContext("2d");
+  g.fillStyle="#000"; g.fillRect(0,0,t.width,t.height);   // pad if the crop overruns an edge
+  g.drawImage(c,sx,sy,sw,sh,0,0,t.width,t.height);
+  return t.toDataURL("image/jpeg",0.78);
+}
+// smallest box containing all of them, so a crop can cover the lesion AND the
+// cm markers even when the ruler sits well below the lesion
+function unionBox(...bs){
+  const x=Math.min(...bs.map(b=>b[0])), y=Math.min(...bs.map(b=>b[1]));
+  return [x,y,Math.max(...bs.map(b=>b[0]+b[2]))-x,Math.max(...bs.map(b=>b[1]+b[3]))-y];
+}
+// Record a completed step against whichever lineage is being worked on.
+// `render` is that step's picture; `extra` carries its numbers as meta, and can
+// also carry a `work` Blob once a step actually rewrites pixels (colour
+// correction will), so later steps read the corrected image, not the annotated.
+function libMark(step,render,extra){
+  if(currentLibId===null) return;
+  const opts=Object.assign({},extra);
+  if(render) opts.render=render;
+  libMarkStep(currentLibId,step,opts).then(libUpdateUI).catch(e=>setStatus("library: "+e));
+}
+// the numbers a finished step produced, for the checklist
+function stepNums(k,m){
+  m=m||{};
+  if(k==="colour"&&m.strips)  return `${m.strips} strip(s) · ${m.swatches} swatches`;
+  if(k==="lesion"&&m.areaPx)  return `${m.areaPx.toLocaleString()} px enclosed`;
+  if(k==="ruler"&&m.pxPerCm)  return `${m.pxPerCm} px/cm`;
+  if(k==="area"&&m.diaMm)     return `${m.diaMm} mm widest · ${m.areaMm2} mm²`;
+  return "";
+}
+async function libUpdateUI(){
+  const [os,ps]=await Promise.all([libAll("originals"),libAll("processed")]);
+  $("lib-open").textContent = os.length
+    ? `Image libraries — ${os.length} standard, ${ps.length} processed`
+    : "Image libraries — empty";
+}
+
+let libSel=null, libTab="proc";
+async function renderLibrary(){
+  const store=libTab==="orig"?"originals":"processed";
+  const list=(await libAll(store)).sort((a,b)=>new Date(b.addedAt)-new Date(a.addedAt));
+  $("tab-orig").classList.toggle("on",libTab==="orig");
+  $("tab-proc").classList.toggle("on",libTab==="proc");
+  const g=$("library");
+  if(!list.some(r=>r.id===libSel)) libSel=null;
+  g.innerHTML=list.length?"":`<p class="hint">${libTab==="orig"
+    ? "No images imported yet."
+    : "Nothing processed yet — run a step on an image and its result appears here."}</p>`;
+  list.forEach(r=>{
+    const d=document.createElement("div");
+    d.className="gitem"+(libSel===r.id?" sel":"");
+    d.innerHTML=`<img src="${libTab==="orig"?r.thumb:r.preview}" alt="">
+      <div class="meta">${r.name}<br>${fmtDate(r.addedAt)} · ${r.w}×${r.h}
+      ${libTab==="orig"?"" :`<div class="tags">${stepTags(r.steps)}</div>`}
+      ${libSel===r.id?'<div class="pick">selected</div>':""}</div>`;
+    d.onclick=()=>{libSel=(libSel===r.id?null:r.id);renderLibrary();};
+    g.appendChild(d);
+  });
+  disarmLibDel();                       // the selection just changed under it
+  $("lib-steps").disabled=libSel===null||libTab==="orig";
+  $("lib-steps").classList.toggle("hidden",libTab==="orig");
+  $("lib-del").disabled=libSel===null;
+  $("lib-del").textContent=libTab==="orig"?"Delete":"Undo processing";
+  $("lib-instruct").textContent = libTab==="orig"
+    ? "The images as imported. Nothing here is ever altered by a processing step."
+    : (libSel===null ? "Each image as it stands after every step applied to it."
+                     : "Tap Steps to see what was done to this image.");
+}
+$("tab-orig").onclick=()=>{libTab="orig";libSel=null;renderLibrary();};
+$("tab-proc").onclick=()=>{libTab="proc";libSel=null;renderLibrary();};
+$("lib-open").onclick=()=>{libSel=null;renderLibrary();show("stage-library");};
+$("lib-back").onclick=()=>show("stage-capture");
+// In Standard the whole lineage goes; in Processed only the steps go, putting
+// the original back on offer everywhere.
+const disarmLibDel=armable($("lib-del"),
+  // Standard deletes the whole lineage; Processed only discards the steps,
+  // which is a much smaller thing to agree to -- so the labels differ.
+  ()=>libTab==="orig" ? "Delete image and all its steps — tap again"
+                      : "Discard steps, keep original — tap again",
+  async()=>{
+    if(libSel===null) return;
+    const whole=libTab==="orig";
+    await libForget(libSel,!whole);
+    if(currentLibId===libSel) currentLibId=null;
+    libSel=null; renderLibrary(); libUpdateUI();
+  });
+// Each finished step shows its own picture and its own numbers -- ticks alone
+// said the work had happened without ever showing the result of it.
+let stepsRec=null;
+$("lib-steps").onclick=async()=>{
+  const r=await libGet("processed",libSel);
+  if(!r) return;
+  stepsRec=r;
+  $("steps-title").textContent=`${r.name} · ${fmtDate(r.addedAt)} · ${r.w}×${r.h}`;
+  $("steps-thumb").src=r.preview;
+  const renders=r.renders||{};
+  $("steps-list").innerHTML=LIB_STEPS.map(([k,label,sub])=>{
+    const at=r.steps[k], shot=renders[k], nums=stepNums(k,r.meta);
+    return `<li><span class="tick ${at?"done":"todo"}">${at?"✓":"○"}</span>`
+         + `<span class="lbl">${label}<span class="sub">${sub}`
+         + `${at?` · ${fmtDate(at)}`:""}</span>`
+         + `${nums?`<span class="nums">${nums}</span>`:""}</span>`
+         + `${shot?`<span class="shot"><img src="${shot}" alt="" data-step="${k}"></span>`:""}`
+         + `</li>`;
+  }).join("");
+  [...$("steps-list").querySelectorAll("img")].forEach(el=>{
+    el.onclick=()=>{
+      const [k,label]=LIB_STEPS.find(s=>s[0]===el.dataset.step);
+      openImage(el.src,`<b>${label}</b> · ${stepsRec.name}`
+        +(stepNums(k,stepsRec.meta)?`<br>${stepNums(k,stepsRec.meta)}`:""));
+    };
+  });
+  show("stage-steps");
+};
+$("steps-back").onclick=()=>{renderLibrary();show("stage-library");};
+
+// ---------- colour calibration (stage 1: find the strips) ----------
+// Detection only for now. The correction maths is meaningless unless these
+// swatches are right, so this screen exists to check them: the reference
+// reports 9+10 on half.jpg and 18+18 on l1-cropped.jpg and l2.jpg.
+let ccImg=null, ccSwatches=null, ccBox=null;
+const captureColourZoom=setupSnapshotZoom("ccanvas");
+$("cc-again").onclick=pickForColour;
+$("cc-back").onclick=()=>show("stage-capture");
+function startColour(im){
+  ccImg=im; ccSwatches=null; ccBox=null;
+  $("cc-apply").classList.add("hidden");
+  $("cc-instruct").textContent="Looking for the card's colour strips…";
+  $("cc-detail").textContent="";
+  show("stage-colour");
+  defer(()=>runColourDetect(imgName));
+}
+function runColourDetect(name){
+  const c=$("ccanvas");
+  c.width=ccImg.naturalWidth; c.height=ccImg.naturalHeight;
+  const g=c.getContext("2d");
+  g.setTransform(1,0,0,1,0,0);
+  g.drawImage(ccImg,0,0);
+  let rgba=null,bgr=null,res=null,err=null;
+  try{
+    rgba=cv.imread(c);
+    bgr=new cv.Mat(); cv.cvtColor(rgba,bgr,cv.COLOR_RGBA2BGR);
+    res=detectColourStrips(bgr);
+  }catch(ex){ err=cvErr(ex); }
+  if(rgba) rgba.delete();
+  if(bgr) bgr.delete();
+  if(res&&res.flat) res.flat.delete();
+  const d=window.__cbDiag||{};
+  if(err||!res||!res.strips.length){
+    $("cc-instruct").textContent="No colour strips found in this photo.";
+    $("cc-detail").textContent=err?("error: "+err)
+      :((d.reason||"")+`  [seeds ${d.seeds||0} at chroma ${d.thr||0}, `
+        +`axis inliers ${d.inliers||0}, candidate bands ${d.candidates||0}]`);
+    $("cc-apply").classList.add("hidden");
+    captureColourZoom(); show("stage-colour"); return;
+  }
+  // draw each strip's swatch outlines so the detection can be judged
+  const cols=["#ffe000","#00aaff","#00ff80"];
+  const lw=Math.max(2,Math.round(c.width/500));
+  res.strips.forEach((st,si)=>{
+    g.strokeStyle=cols[si%cols.length]; g.lineWidth=lw;
+    st.polys.forEach(p=>{
+      g.beginPath();
+      p.forEach((pt,i)=>i?g.lineTo(pt[0],pt[1]):g.moveTo(pt[0],pt[1]));
+      g.closePath(); g.stroke();
+    });
+  });
+  $("cc-instruct").textContent=
+    `Found ${res.strips.length} strip${res.strips.length===1?"":"s"}: `
+    +res.strips.map(s=>s.segs.length+" swatches").join(" + ");
+  $("cc-detail").textContent=
+    `${name} · ${c.width}×${c.height} · seeds ${d.seeds} at chroma ${d.thr}, `
+    +`axis inliers ${d.inliers}, candidate bands ${d.candidates}. `
+    +`Check the outlines sit on the swatches, then tap Apply correction.`;
+  // Marks the lineage colour-calibrated, which takes it out of this step's
+  // picker. No `work` blob yet: the correction maths is not applied, so the
+  // pixels later steps read are still the original's. Crop to the strips
+  // themselves: at whole-frame scale the swatch outlines are a pixel wide.
+  let mnx=1e9,mny=1e9,mxx=-1e9,mxy=-1e9;
+  res.strips.forEach(st=>st.polys.forEach(pl=>pl.forEach(pt=>{
+    mnx=Math.min(mnx,pt[0]); mny=Math.min(mny,pt[1]);
+    mxx=Math.max(mxx,pt[0]); mxy=Math.max(mxy,pt[1]);})));
+  ccBox = mxx>mnx ? [mnx,mny,mxx-mnx,mxy-mny] : null;
+  ccSwatches = res.strips.reduce((a,st)=>a.concat(st.rgbs),[]);
+  libMark("colour",renderOf(c,ccBox),
+          {meta:{strips:res.strips.length,
+                 swatches:res.strips.map(s=>s.segs.length).join("+")}});
+  $("cc-apply").classList.remove("hidden");
+  $("cc-apply").disabled=false;
+  $("cc-apply").textContent="Apply correction";
+  captureColourZoom();
+  show("stage-colour");
+}
+
+// ---------- colour calibration (stage 2: correct the image) ----------------
+// Without the card's published swatch values there is no absolute colour to
+// aim at, so this corrects the one thing the card can tell us on its own: the
+// greys. Whatever the strips are, their least colourful swatches should read
+// neutral, and how far they miss is the cast the lighting put on the photo.
+// That fixes a cast; it does not make colour absolutely accurate.
+const NEUTRAL_FLOOR=25, NEUTRAL_CEIL=245;   // crushed and clipped swatches lie
+const NEUTRAL_CHROMA=25;                    // above this a swatch is a colour
+function neutralGains(rgbs){
+  const chroma=c=>Math.max(c[0],c[1],c[2])-Math.min(c[0],c[1],c[2]);
+  // a blown-out or blocked-up swatch has had its ratios destroyed by the
+  // sensor, and would drag the gains with it
+  const ok=rgbs.filter(c=>Math.min(c[0],c[1],c[2])>=NEUTRAL_FLOOR
+                       && Math.max(c[0],c[1],c[2])<=NEUTRAL_CEIL);
+  if(!ok.length) return {err:"Every swatch is either blown out or crushed — no usable grey."};
+  // Only genuinely flat swatches, not merely the flattest available. Taking
+  // the flattest third of a saturated card hands the gain to a pink patch and
+  // invents a 20% correction out of nothing.
+  const pick=ok.filter(c=>chroma(c)<=NEUTRAL_CHROMA);
+  if(!pick.length)
+    return {err:`No near-neutral swatch on this card (flattest is chroma `
+      +`${Math.round(Math.min(...ok.map(chroma)))}, needs ${NEUTRAL_CHROMA} or less) — `
+      +`nothing grey to calibrate against.`};
+  const mean=i=>pick.reduce((s,c)=>s+c[i],0)/pick.length;
+  const r=mean(0),g=mean(1),b=mean(2),t=(r+g+b)/3;
+  const gains=[t/r,t/g,t/b];
+  // a real cast is a few percent. Ten-to-one says the swatches are not greys.
+  if(gains.some(k=>!isFinite(k)||k<0.5||k>2))
+    return {err:`Correction would be extreme (${gains.map(k=>k.toFixed(2)).join("/")}) — refusing it.`};
+  return {gains, used:pick.length, of:rgbs.length,
+          worst:Math.round(Math.max(...pick.map(chroma)))};
+}
+$("cc-apply").onclick=()=>defer(()=>{
+  const n=neutralGains(ccSwatches||[]);
+  if(n.err){ $("cc-detail").textContent=n.err; show("stage-colour"); return; }
+  const c=$("ccanvas"), g=c.getContext("2d");
+  // redraw from the source: the canvas on screen carries the swatch outlines,
+  // and those must not be baked into the pixels later steps read
+  g.setTransform(1,0,0,1,0,0);
+  g.clearRect(0,0,c.width,c.height);
+  g.drawImage(ccImg,0,0);
+  const im=g.getImageData(0,0,c.width,c.height), d=im.data;
+  // three 256-entry tables, not three multiplies per pixel: this runs over
+  // every pixel of a full-resolution photo
+  const lut=n.gains.map(k=>{
+    const t=new Uint8ClampedArray(256);
+    for(let v=0;v<256;v++) t[v]=Math.round(v*k);
+    return t;
+  });
+  for(let i=0;i<d.length;i+=4){ d[i]=lut[0][d[i]]; d[i+1]=lut[1][d[i+1]]; d[i+2]=lut[2][d[i+2]]; }
+  g.putImageData(im,0,0);
+  const pct=k=>((k-1)*100).toFixed(1).replace(/^(?!-)/,"+")+"%";
+  $("cc-instruct").textContent="Colour corrected.";
+  $("cc-detail").textContent=
+    `R ${pct(n.gains[0])} · G ${pct(n.gains[1])} · B ${pct(n.gains[2])}, `
+    +`from ${n.used} neutral swatch${n.used===1?"":"es"} of ${n.of} `
+    +`(chroma ${n.worst} or less). Later steps now read the `
+    +`corrected image. Outlines removed — the picture above is what was saved.`;
+  // the corrected pixels become the working copy the next step reads
+  c.toBlob(b=>{
+    libMark("colour",renderOf(c,ccBox),
+            {work:b, meta:{gains:n.gains.map(k=>+k.toFixed(3)).join("/"), corrected:1}});
+  },"image/jpeg",0.92);
+  // applying twice would compound the gains
+  $("cc-apply").disabled=true;
+  $("cc-apply").textContent="Correction applied";
+  captureColourZoom();
+  show("stage-colour");
+});
+
+// ---------- full-screen view of one comparison photo ----------
+// Three ways out, because a full-screen overlay with no obvious exit is a
+// trap on a phone: the button, tapping the backdrop, or Escape.
+function openImage(src,capHtml){
+  $("lb-img").src=src;
+  $("lb-cap").innerHTML=capHtml;
+  $("lightbox").classList.remove("hidden");
+}
+function openLightbox(rec,when){
+  openImage(rec.crop||rec.img,
+    `<b>${when}</b> · ${fmtDate(rec.t)}<br>${rec.diaMm} mm · ${rec.areaMm2} mm²`+
+    (rec.cropMm?`<br><span class="hint">${rec.cropMm} mm of skin across</span>`
+               :`<br><span class="grew">whole photo (saved by an older version)</span>`));
+}
+function closeLightbox(){ $("lightbox").classList.add("hidden"); $("lb-img").src=""; }
+$("lb-close").onclick=closeLightbox;
+$("lightbox").addEventListener("click",e=>{ if(e.target===$("lightbox")) closeLightbox(); });
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape"&&!$("lightbox").classList.contains("hidden")) closeLightbox(); });
+
+// ---------- compare two or more results ----------
+$("gal-go").onclick=()=>{
+  const byId=Object.fromEntries(loadResults().map(r=>[r.id,r]));
+  const set=gsel.map(id=>byId[id]).filter(Boolean)
+               .sort((a,b)=>new Date(a.t)-new Date(b.t));   // oldest first
+  const n=set.length;
+  // The headline change is always earliest against latest; the photos in
+  // between are listed step by step underneath it.
+  const a=set[0], b=set[n-1];
+  const sgn=v=>(v>0?"+":"")+v.toFixed(1);
+  const labels = n===2 ? ["Earlier","Later"]
+    : set.map((r,i)=> i===0?"Earliest" : i===n-1?"Latest" : `#${i+1}`);
+  // Side by side for a pair, stacked for three or more (see .cmp.stack).
+  $("cmp-imgs").classList.toggle("stack", n>2);
+  $("cmp-imgs").innerHTML=set.map((r,i)=>
+    `<div><img src="${r.crop||r.img}" alt=""><div class="cap"><b>${labels[i]}</b><br>
+     ${fmtDate(r.t)}<br>${r.diaMm} mm · ${r.areaMm2} mm²${
+       r.crop?"":'<br><span class="grew">whole photo</span>'}</div></div>`).join("");
+  const legacy=set.filter(r=>!r.crop).length;
+  // double-tap a photo to see it full screen. Detected from pointerup rather
+  // than the dblclick event so mouse and touch behave the same way.
+  [...$("cmp-imgs").querySelectorAll("img")].forEach((el,i)=>{
+    let last=0;
+    el.addEventListener("pointerup",()=>{
+      const now=Date.now();
+      if(now-last<350){ last=0; openLightbox(set[i],labels[i]); }
+      else last=now;
+    });
+  });
+  const days=Math.round((new Date(b.t)-new Date(a.t))/86400000);
+  const dDia=b.diaMm-a.diaMm, dArea=b.areaMm2-a.areaMm2;
+  const pctDia=a.diaMm? dDia/a.diaMm*100 : 0;
+  const pctArea=a.areaMm2? dArea/a.areaMm2*100 : 0;
+  // Below ~10% on diameter the two measurements are within the noise of
+  // re-photographing and re-calibrating, so don't call that a change.
+  const cls=Math.abs(pctDia)<10?"steady":(pctDia>0?"grew":"shrank");
+  const word=Math.abs(pctDia)<10?"No clear change":(pctDia>0?"Larger":"Smaller");
+  // Every photo, with the step from the one before it, so a run of small
+  // increases is visible even when the ends alone say "no clear change".
+  const series = n<3 ? "" :
+    `<div class="series">`+set.map((r,i)=>{
+      const step=i? r.diaMm-set[i-1].diaMm : null;
+      return `${labels[i]} · ${fmtDate(r.t)}: <b>${r.diaMm} mm</b> · ${r.areaMm2} mm²`+
+             (step===null?"":` (${sgn(step)} mm)`);
+    }).join("<br>")+`</div>`;
+  const crops=set.map(r=>r.cropMm);
+  const allCropped=crops.every(c=>c);
+  const sameCrop=allCropped&&crops.every(c=>c===crops[0]);
+  const cropList=[...new Set(crops.filter(Boolean))].join(" mm, ")+" mm";
+  const methods=new Set(set.map(r=>r.dm||"equiv"));
+  $("cmp-delta").innerHTML=
+    `<span class="big ${cls}">${word}</span>`+
+    (n>2?`<span class="hint">Across ${n} photos, earliest to latest.</span><br>`:"")+
+    `Diameter: ${a.diaMm} → ${b.diaMm} mm (<b>${sgn(dDia)} mm</b>, ${sgn(pctDia)}%)<br>`+
+    `Area: ${a.areaMm2} → ${b.areaMm2} mm² (<b>${sgn(dArea)} mm²</b>, ${sgn(pctArea)}%)<br>`+
+    `Time ${n>2?"from first to last photo":"between photos"}: <b>${days} day${days===1?"":"s"}</b><br>`+
+    `Scale used: ${a.pxPerCm} → ${b.pxPerCm} px/cm`+
+    series+
+    (Math.abs(pctDia)<10?`<br><span class="hint">Differences under 10% are within
+      re-measurement error — treat as unchanged.</span>`:"")+
+    (legacy
+      ? `<br><span class="grew">${legacy===n?(n===2?"Both measurements were":"All measurements were")
+           :legacy===1?"One measurement was":`${legacy} measurements were`}
+         saved by an older version and ${legacy===1?"is":"are"} shown as the whole photo, not a
+         zoomed crop — so the pictures are at different magnifications and can't be compared by
+         eye. Re-measure to get matched crops. The numbers below are still valid.</span>`
+      : "")+
+    (allCropped&&!sameCrop
+      ? `<br><span class="hint">The crops cover ${cropList}
+         of skin, so they are not shown at the same magnification — compare the
+         numbers rather than the pictures.</span>`
+      : (sameCrop
+        ? `<br><span class="hint">${n===2?"Both crops cover":"Every crop covers"} ${crops[0]} mm of skin, so
+           they are at the same scale — the size difference you see is real.</span>` : ""))+
+    (methods.size>1
+      ? `<br><span class="grew">${n===2?"These two":"These photos"} measured diameter differently
+         (the older ${n===2?"one":"ones"} used the equal-area circle, which reads smaller), so the
+         diameter change above is not a like-for-like comparison. The area
+         figures are still comparable.</span>` : "");
+  show("stage-compare");
+};
+function tickCenter(t){const xs=t.corners.map(p=>p[0]),ys=t.corners.map(p=>p[1]);
+  return [xs.reduce((s,v)=>s+v,0)/xs.length, ys.reduce((s,v)=>s+v,0)/ys.length];}
+$("restart").onclick=()=>{lastSavedId=null;updateCompareUI();pickForMeasure();};
+// Reject the finished measurement: drop the record it just saved, keep the
+// approved lesion outline, and go back to calibrating the scale.
+$("redo-scale").onclick=()=>{
+  if(lastSavedId!==null){
+    writeResults(loadResults().filter(r=>r.id!==lastSavedId));
+    lastSavedId=null; updateCompareUI();
+  }
+  showReview();
+};
+</script>
+<script async src="vendor/opencv.js" onload="if(cv.getBuildInformation){onOpenCvReady()}else{cv['onRuntimeInitialized']=onOpenCvReady}"></script>
+</body>
+</html>
