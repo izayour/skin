@@ -7,7 +7,19 @@
 <style>
   * { box-sizing: border-box; }
   body { margin:0; font-family:system-ui,sans-serif; background:#111; color:#eee; }
-  header { padding:8px 14px; background:#1b5e20; font-weight:600; font-size:16px; }
+  header { display:flex; align-items:center; gap:10px;
+           padding:8px 14px; background:#1b5e20; font-weight:600; font-size:16px; }
+  /* one logo file for every page: black artwork on transparency, inverted to
+     white here because every header it sits on is dark */
+  /* Horizontal lockup: bird and wordmark on one line, so the header costs a
+     row of pixels instead of two. It carries the product name itself, which
+     is why no title text sits beside it. */
+  .brand { height:32px; width:auto; display:block; flex:none; filter:invert(1); }
+  /* Way out of any stage. It lives in the header, which sits outside the
+     stages, so one button covers every screen instead of each stage
+     needing its own. Overrides the full-width button rule below. */
+  .homebtn { margin:0 0 0 auto; width:auto; flex:none; padding:7px 12px;
+             font-size:13px; background:#2e7d32; }
   main { padding:8px; max-width:720px; margin:0 auto; }
   .card { background:#1d1d1d; border-radius:12px; padding:10px; margin-bottom:8px; }
   button { border:0; border-radius:10px; padding:12px 10px; font-size:15px; font-weight:600;
@@ -57,7 +69,17 @@
   .cmp > div { flex:1; min-width:0; }
   .cmp img { width:100%; border-radius:8px; display:block; }
   .cmp .cap { font-size:11px; color:#bbb; margin-top:4px; line-height:1.4; }
+  /* Two photos fit across a phone side by side, which is the layout that lets
+     the eye flick between them. Three or more do not -- each would be a third
+     of the width and too small to read -- so they stack and are scrolled
+     through instead, each capped so one photo does not fill the whole screen. */
+  .cmp.stack { flex-direction:column; gap:14px; }
+  .cmp.stack > div { flex:none; }
+  .cmp.stack img { width:auto; max-width:100%; max-height:55vh; margin:0 auto; }
+  .cmp.stack .cap { text-align:center; }   /* centred image, so centre its caption */
   .delta { margin-top:10px; font-size:14px; line-height:1.7; }
+  .delta .series { font-size:13px; line-height:1.6; margin:6px 0 8px;
+                   padding:7px 9px; background:#222; border-radius:6px; }
   .delta .big { font-size:19px; font-weight:700; display:block; margin-bottom:4px; }
   .grew { color:#ff8a65; } .shrank { color:#4fc3f7; } .steady { color:#9e9e9e; }
   .steplist { list-style:none; padding:0; margin:10px 0 0; }
@@ -92,7 +114,8 @@
 </style>
 </head>
 <body>
-<header>Skin Lesion Scanner</header>
+<header><img class="brand" src="logo-wide.png" alt="Canary Detect">
+  <button id="home" class="homebtn hidden">Main menu</button></header>
 <main>
   <div id="status" class="card">Loading OpenCV.js…</div>
 
@@ -100,18 +123,31 @@
     <p class="hint">Pick a processing step. Each one asks which image to run it
       on, and offers the images it hasn't been run on yet.</p>
     <button id="go-measure">Measure a lesion</button>
-    <!-- Hidden for the 3.0 line. The colour-calibration code below is left
-         intact, so dropping the hidden class brings the step straight back. -->
     <button class="secondary hidden" id="cc-open">Colour calibration</button>
     <button class="secondary" id="compare-open" disabled>Compare over time</button>
     <button class="secondary" id="lib-open">Image libraries</button>
+    <button class="secondary" id="settings-open">Settings</button>
     <p class="disclaimer">Not a medical device. For demonstration only — does not diagnose.<br>
       <span id="appver">Version …</span></p>
-    <div id="faillog-row" class="hidden" style="margin-top:10px">
+  </section>
+
+  <!-- Options that are off out of the box, plus the failure log that used to
+       sit on the menu. Both switches turn on a fallback that most runs never
+       need: hand-tracing a border, and the colour-calibration step. -->
+  <section id="stage-settings" class="card hidden">
+    <span class="badge">Settings</span>
+    <label class="optline"><input type="checkbox" id="set-trace">
+      <span>Show <b>Trace myself</b> — draw the lesion border by hand when the
+      automatic outline is wrong or fails.</span></label>
+    <label class="optline"><input type="checkbox" id="set-colour">
+      <span>Show <b>Colour calibration</b> — an extra step that corrects colour
+      from the card's strips before measuring.</span></label>
+    <div style="margin-top:14px">
       <span class="hint"><span id="faillog-count">0</span> failed detection(s) logged.</span>
       <div class="row"><button id="faillog-copy" class="secondary">Copy failure log</button>
         <button id="faillog-clear" class="secondary">Clear</button></div>
     </div>
+    <button id="set-back" class="secondary">Back</button>
   </section>
 
   <div id="spinner" class="card hidden">Working…</div>
@@ -122,7 +158,7 @@
     <canvas id="canvas"></canvas>
     <p class="hint">The box just needs to contain the lesion — it doesn't have to be tight.</p>
     <div class="row tight"><button id="detect" disabled>Detect</button>
-      <button id="ltrace" class="secondary">Trace myself</button>
+      <button id="ltrace" class="secondary hidden">Trace myself</button>
       <button id="rebox" class="secondary">New photo</button></div>
   </section>
 
@@ -147,7 +183,7 @@
     <p class="instruct">Does the green outline match the lesion?</p>
     <canvas id="rcanvas"></canvas>
     <div class="row tight"><button id="accept">Accept</button>
-      <button id="reject-trace" class="secondary">Trace myself</button>
+      <button id="reject-trace" class="secondary hidden">Trace myself</button>
       <button id="reject" class="danger">Redraw box</button></div>
   </section>
 
@@ -197,9 +233,10 @@
     <button id="gen-back" class="danger">Reject — back to lesion</button>
   </section>
 
-  <!-- Choose which image a step runs on. Shows the standard (untouched) image
-       or, once anything has been done to it, the processed result -- and hides
-       whatever this step has already been applied to. -->
+  <!-- Where an image comes from before a step runs on it: camera, device, or
+       the demo photo. It used to also list the library as thumbnails to pick
+       from; that grid is gone -- the Image libraries screen is where images are
+       looked at. -->
   <section id="stage-pick" class="card hidden">
     <span class="badge" id="pick-badge">Choose an image</span>
     <p class="instruct" id="pick-instruct"></p>
@@ -210,11 +247,7 @@
     <div class="row tight"><button id="pick-cam">Take a photo</button>
       <button id="pick-file" class="secondary">From device</button>
       <button id="pick-demo" class="secondary">Demo photo</button></div>
-    <div class="gallery" id="pickgrid"></div>
-    <label class="optline"><input type="checkbox" id="pick-all">
-      Also show images this step has already been applied to</label>
-    <div class="row tight"><button id="pick-go" disabled>Use this image</button>
-      <button id="pick-back" class="secondary">Back</button></div>
+    <div class="row tight"><button id="pick-back" class="secondary">Back</button></div>
   </section>
 
   <section id="stage-library" class="card hidden">
@@ -242,13 +275,14 @@
     <p class="instruct" id="cc-instruct">Looking for the card's colour strips…</p>
     <canvas id="ccanvas"></canvas>
     <p class="hint" id="cc-detail"></p>
-    <div class="row tight"><button id="cc-again" class="secondary">Another image</button>
+    <div class="row tight"><button id="cc-apply" class="hidden">Apply correction</button>
+      <button id="cc-again" class="secondary">Another image</button>
       <button id="cc-back" class="secondary">Back</button></div>
   </section>
 
   <section id="stage-gallery" class="card hidden">
     <span class="badge">Compare over time</span>
-    <p class="instruct" id="gal-instruct">Pick two saved measurements to compare.</p>
+    <p class="instruct" id="gal-instruct">Pick two or more saved measurements to compare.</p>
     <div class="gallery" id="gallery"></div>
     <div class="row tight"><button id="gal-go" disabled>Compare</button>
       <button id="gal-del" class="danger" disabled>Delete</button>
@@ -258,7 +292,7 @@
   <section id="stage-compare" class="card hidden">
     <span class="badge">Change over time</span>
     <div class="cmp" id="cmp-imgs"></div>
-    <p class="hint">Double-tap either photo to see it full screen.</p>
+    <p class="hint">Double-tap any photo to see it full screen.</p>
     <div class="delta" id="cmp-delta"></div>
     <p class="disclaimer">Sizes come from each photo's own ruler calibration, so
       small differences may be measurement error rather than real change. Not a
@@ -280,11 +314,11 @@
   </div>
 </main>
 
-<script src="js/pipeline.js?v=70"></script>
-<script src="js/ruler.js?v=70"></script>
-<script src="js/genruler.js?v=70"></script>
-<script src="js/skinopus.js?v=70"></script>
-<script src="js/library.js?v=70"></script>
+<script src="js/pipeline.js?v=79"></script>
+<script src="js/ruler.js?v=79"></script>
+<script src="js/genruler.js?v=79"></script>
+<script src="js/skinopus.js?v=79"></script>
+<script src="js/library.js?v=79"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
@@ -303,8 +337,13 @@ const APP_VERSION=(()=>{
   return m?m[1]:"?";
 })();
 $("appver").textContent=`v${APP_RELEASE} (build ${APP_VERSION})`;
-const STAGES=["stage-capture","stage-box","stage-lmanual","stage-review","stage-rulerbox","stage-ticks","stage-blurry","stage-final","stage-genruler","stage-colour","stage-pick","stage-library","stage-steps","stage-gallery","stage-compare","spinner"];
-const show=id=>STAGES.forEach(s=>$(s).classList.toggle("hidden",s!==id));
+const STAGES=["stage-capture","stage-settings","stage-box","stage-lmanual","stage-review","stage-rulerbox","stage-ticks","stage-blurry","stage-final","stage-genruler","stage-colour","stage-pick","stage-library","stage-steps","stage-gallery","stage-compare","spinner"];
+const show=id=>{
+  STAGES.forEach(s=>$(s).classList.toggle("hidden",s!==id));
+  // nothing to go back to from the menu itself, and interrupting a
+  // spinner mid-computation would leave the run half-done
+  $("home").classList.toggle("hidden", id==="stage-capture"||id==="spinner");
+};
 const defer=fn=>{show("spinner");setTimeout(fn,30);};   // let spinner paint before heavy work
 // The status card sits above every stage, so once loading is done it is a
 // wasted row on a phone -- collapse it, and only bring it back for errors.
@@ -314,7 +353,7 @@ function onOpenCvReady(){cvReady=true;setStatus("");show("stage-capture");
   // the pre-2.1 single library lived in localStorage and is superseded by the
   // originals/processed pair in IndexedDB -- drop it so it isn't holding quota
   try{ localStorage.removeItem("library"); }catch(e){}
-  updateFailUI();updateCompareUI();libUpdateUI();}
+  applySettings();updateFailUI();updateCompareUI();libUpdateUI();}
 let imgName="(none)";
 
 // screen -> image pixels. With a view, undo its scale/offset so callers keep
@@ -523,42 +562,17 @@ function setupPinchZoom(canvasId,redraw,onPinchStart){
   return ()=>ptrs.size>=2;
 }
 
-// ---------- choosing which image a step runs on ----------------------------
-// Every processing entry point goes through here. The picker is handed the
-// step it is choosing for, and library.js hands back only the lineages that
-// step has not already been applied to. Newly imported images skip the grid
-// entirely -- an image that has just arrived obviously has no steps on it.
-let pickStep=null, pickSel=null, pickThen=null;
+// ---------- where the image for a step comes from --------------------------
+// Every processing entry point goes through here. It used to also show the
+// library as a grid of thumbnails with a "Use this image" button; that is gone.
+// Images are looked at on the Image libraries screen instead, and a step now
+// always starts from a fresh camera shot, a file off the device, or the demo.
+let pickStep=null, pickThen=null;
 function openPicker(step,title,instruct,then){
-  pickStep=step; pickThen=then; pickSel=null;
+  pickStep=step; pickThen=then;
   $("pick-badge").textContent=title;
   $("pick-instruct").textContent=instruct;
-  $("pick-all").checked=false;
   show("stage-pick");
-  renderPicker();
-}
-async function renderPicker(){
-  const list=await libCandidates(pickStep,$("pick-all").checked);
-  // an empty grid means two very different things -- nothing imported at all,
-  // or everything imported has had this step already
-  const total=(await libAll("originals")).length;
-  const g=$("pickgrid");
-  if(!list.some(e=>e.id===pickSel)) pickSel=null;
-  g.innerHTML=list.length?"":
-    `<p class="hint">${total===0
-      ? "No images yet — take a photo, add one from your device, or try the demo."
-      : "Every image in the library has already had this step applied. Add a new one, or tick the box below to redo one."}</p>`;
-  list.forEach(r=>{
-    const d=document.createElement("div");
-    d.className="gitem"+(pickSel===r.id?" sel":"");
-    d.innerHTML=`<img src="${r.thumb}" alt="">
-      <div class="meta">${r.name}<br>${fmtDate(r.addedAt)} · ${r.w}×${r.h}
-      <div class="tags">${stepTags(r.steps)}</div>
-      ${pickSel===r.id?'<div class="pick">selected</div>':""}</div>`;
-    d.onclick=()=>{pickSel=(pickSel===r.id?null:r.id);renderPicker();};
-    g.appendChild(d);
-  });
-  $("pick-go").disabled=pickSel===null;
 }
 // the steps a lineage already carries -- "Standard" when it carries none
 function stepTags(steps){
@@ -566,9 +580,38 @@ function stepTags(steps){
   return on.length ? on.map(s=>`<span class="tag">${s[1]}</span>`).join("")
                    : `<span class="tag none">Standard — unprocessed</span>`;
 }
-$("pick-all").onchange=()=>renderPicker();
 $("pick-back").onclick=()=>show("stage-capture");
-$("pick-go").onclick=()=>{ if(pickSel!==null) usePicked(pickSel); };
+
+// ---------- settings -------------------------------------------------------
+// Both default off: the automatic outline is right on most photos, and colour
+// calibration is a step for the card, not for a plain lesion photo. Turning
+// one on only makes its button appear -- the code behind it never went away.
+const SETTINGS_KEY="settings";
+const DEFAULTS={trace:false,colour:false};
+function loadSettings(){
+  try{ return {...DEFAULTS,...JSON.parse(localStorage.getItem(SETTINGS_KEY)||"{}")}; }
+  catch(e){ return {...DEFAULTS}; }
+}
+let settings=loadSettings();
+function applySettings(){
+  $("ltrace").classList.toggle("hidden",!settings.trace);
+  $("reject-trace").classList.toggle("hidden",!settings.trace);
+  $("cc-open").classList.toggle("hidden",!settings.colour);
+  $("set-trace").checked=settings.trace;
+  $("set-colour").checked=settings.colour;
+}
+function setOption(k,v){
+  settings[k]=v;
+  try{ localStorage.setItem(SETTINGS_KEY,JSON.stringify(settings)); }catch(e){}
+  applySettings();
+}
+$("set-trace").onchange=e=>setOption("trace",e.target.checked);
+$("set-colour").onchange=e=>setOption("colour",e.target.checked);
+$("settings-open").onclick=()=>{ updateFailUI(); show("stage-settings"); };
+$("set-back").onclick=()=>show("stage-capture");
+// Abandons whatever stage is open. Nothing is saved until a measurement
+// finishes, so the only loss is work in progress on this screen.
+$("home").onclick=()=>show("stage-capture");
 
 // import: straight into the step, since a fresh image can't already have it
 const onPicked=async e=>{
@@ -580,6 +623,16 @@ const onPicked=async e=>{
 };
 $("file").addEventListener("change",onPicked);
 $("filepick").addEventListener("change",onPicked);
+// "Take a photo" goes through <input capture>, which only means anything on a
+// phone or tablet. On a desktop it either does nothing or offers a webcam that
+// cannot be pointed at skin, so the button is hidden there and "From device"
+// carries the whole job. userAgentData.mobile is the direct answer where the
+// browser has it; elsewhere fall back to a device that both has a coarse
+// pointer and reports touch points, which desktops do not.
+const IS_MOBILE = (navigator.userAgentData && typeof navigator.userAgentData.mobile==="boolean")
+  ? navigator.userAgentData.mobile
+  : (matchMedia("(pointer:coarse)").matches && navigator.maxTouchPoints>0);
+$("pick-cam").classList.toggle("hidden",!IS_MOBILE);
 $("pick-cam").onclick=()=>$("file").click();
 $("pick-file").onclick=()=>$("filepick").click();
 $("pick-demo").onclick=async()=>{
@@ -605,9 +658,9 @@ async function usePicked(id){
 }
 
 const pickForMeasure=()=>openPicker("area","Measure a lesion",
-  "Choose an image that hasn't been measured yet.",startMeasure);
+  "Take a photo, add one from your device, or try the demo.",startMeasure);
 const pickForColour=()=>openPicker("colour","Colour calibration",
-  "Choose an image that hasn't been colour calibrated yet.",startColour);
+  "Take a photo of the card, add one from your device, or try the demo.",startColour);
 $("go-measure").onclick=pickForMeasure;
 $("cc-open").onclick=pickForColour;
 
@@ -656,7 +709,8 @@ $("detect").onclick=()=>defer(()=>{
   src.delete();
   if(!res){
     logFailure([x,y,w,h]);
-    alert("Couldn't detect the lesion ("+(window.__segReason||"?")+")\nbox="+JSON.stringify([x,y,w,h])+"\n(logged for analysis)\nDraw a tighter box, or tap 'Trace the border myself'.");
+    alert("Couldn't detect the lesion ("+(window.__segReason||"?")+")\nbox="+JSON.stringify([x,y,w,h])+"\n(logged for analysis)\nDraw a tighter box around the lesion and try again."
+      +(settings.trace?"\nOr tap 'Trace myself' to draw the border by hand.":""));
     show("stage-box");return;
   }
   lesion=res; showReview();
@@ -691,8 +745,11 @@ function logFailure(box){
 }
 function updateFailUI(){
   const n=JSON.parse(localStorage.getItem("faillog")||"[]").length;
-  $("faillog-row").classList.toggle("hidden", n===0);
+  // the row lives on the settings page now, so it always shows -- an empty log
+  // is worth stating, and the two buttons simply have nothing to act on
   $("faillog-count").textContent=n;
+  $("faillog-copy").disabled=n===0;
+  $("faillog-clear").disabled=n===0;
 }
 $("faillog-copy").onclick=async()=>{
   const txt=localStorage.getItem("faillog")||"[]";
@@ -755,8 +812,6 @@ function showReview(){const c=$("rcanvas");drawImgTo(c);drawLesion(c.getContext(
 $("reject").onclick=()=>{drawImgTo($("canvas"));lbox=null;resetView("canvas");redrawL();
   $("detect").disabled=true;boxInstruct();show("stage-box");};
 // reject straight into tracing: the detector already had its go, so skip the
-// box stage rather than making the user redraw a box just to reach the tracer
-$("reject-trace").onclick=()=>{lesion=null;startLManual();};
 $("accept").onclick=()=>defer(()=>{
   const src=cleanSrc();
   // One ruler path for every kind of ruler -- the app works out which detector
@@ -1097,7 +1152,7 @@ function updateCompareUI(){
                         : "Compare over time — measure a lesion first";
 }
 
-// ---------- gallery: pick two saved results ----------
+// ---------- gallery: pick two or more saved results ----------
 let gsel=[];
 function renderGallery(){
   const list=loadResults().slice().sort((a,b)=>new Date(b.t)-new Date(a.t));
@@ -1109,19 +1164,24 @@ function renderGallery(){
     d.className="gitem"+(i>=0?" sel":"");
     d.innerHTML=`<img src="${r.img}" alt="">
       <div class="meta">${fmtDate(r.t)}<br><b>${r.diaMm} mm</b> · ${r.areaMm2} mm²
-      ${i>=0?`<div class="pick">selected ${i+1} of 2</div>`:""}</div>`;
+      ${i>=0?`<div class="pick">selected #${i+1}</div>`:""}</div>`;
+    // Any number of picks, not just two: tapping adds, tapping again removes.
+    // The old version dropped the oldest pick once two were held, which made a
+    // third tap look like the app had lost one.
     d.onclick=()=>{
       const at=gsel.indexOf(r.id);
       if(at>=0) gsel.splice(at,1);
-      else { if(gsel.length>=2) gsel.shift(); gsel.push(r.id); }
+      else gsel.push(r.id);
       renderGallery();
     };
     g.appendChild(d);
   });
-  $("gal-go").disabled=gsel.length!==2;
+  $("gal-go").disabled=gsel.length<2;
+  $("gal-go").textContent = gsel.length>2 ? `Compare ${gsel.length}` : "Compare";
   $("gal-del").disabled=gsel.length===0;
-  $("gal-instruct").textContent = gsel.length===0 ? "Pick two saved measurements to compare."
-    : gsel.length===1 ? "Pick one more." : "Two picked — tap Compare.";
+  $("gal-instruct").textContent = gsel.length===0 ? "Pick two or more saved measurements to compare."
+    : gsel.length===1 ? "Pick at least one more."
+    : `${gsel.length} picked — tap Compare.`;
 }
 $("compare-open").onclick=()=>{gsel=[];renderGallery();show("stage-gallery");};
 $("gal-back").onclick=()=>show("stage-capture");
@@ -1131,6 +1191,8 @@ $("gal-del").onclick=()=>{
   gsel=[];renderGallery();updateCompareUI();
 };
 $("cmp-back").onclick=()=>{renderGallery();show("stage-gallery");};
+
+$("reject-trace").onclick=()=>{lesion=null;startLManual();};
 
 // ---------- browsing the two libraries ------------------------------------
 // Standard: the images as imported, untouched by any step.
@@ -1271,12 +1333,13 @@ $("steps-back").onclick=()=>{renderLibrary();show("stage-library");};
 // Detection only for now. The correction maths is meaningless unless these
 // swatches are right, so this screen exists to check them: the reference
 // reports 9+10 on half.jpg and 18+18 on l1-cropped.jpg and l2.jpg.
-let ccImg=null;
+let ccImg=null, ccSwatches=null, ccBox=null;
 const captureColourZoom=setupSnapshotZoom("ccanvas");
 $("cc-again").onclick=pickForColour;
 $("cc-back").onclick=()=>show("stage-capture");
 function startColour(im){
-  ccImg=im;
+  ccImg=im; ccSwatches=null; ccBox=null;
+  $("cc-apply").classList.add("hidden");
   $("cc-instruct").textContent="Looking for the card's colour strips…";
   $("cc-detail").textContent="";
   show("stage-colour");
@@ -1303,6 +1366,7 @@ function runColourDetect(name){
     $("cc-detail").textContent=err?("error: "+err)
       :((d.reason||"")+`  [seeds ${d.seeds||0} at chroma ${d.thr||0}, `
         +`axis inliers ${d.inliers||0}, candidate bands ${d.candidates||0}]`);
+    $("cc-apply").classList.add("hidden");
     captureColourZoom(); show("stage-colour"); return;
   }
   // draw each strip's swatch outlines so the detection can be judged
@@ -1322,7 +1386,7 @@ function runColourDetect(name){
   $("cc-detail").textContent=
     `${name} · ${c.width}×${c.height} · seeds ${d.seeds} at chroma ${d.thr}, `
     +`axis inliers ${d.inliers}, candidate bands ${d.candidates}. `
-    +`Colour correction is not applied yet — this screen checks the swatches first.`;
+    +`Check the outlines sit on the swatches, then tap Apply correction.`;
   // Marks the lineage colour-calibrated, which takes it out of this step's
   // picker. No `work` blob yet: the correction maths is not applied, so the
   // pixels later steps read are still the original's. Crop to the strips
@@ -1331,12 +1395,87 @@ function runColourDetect(name){
   res.strips.forEach(st=>st.polys.forEach(pl=>pl.forEach(pt=>{
     mnx=Math.min(mnx,pt[0]); mny=Math.min(mny,pt[1]);
     mxx=Math.max(mxx,pt[0]); mxy=Math.max(mxy,pt[1]);})));
-  libMark("colour",renderOf(c,mxx>mnx?[mnx,mny,mxx-mnx,mxy-mny]:null),
+  ccBox = mxx>mnx ? [mnx,mny,mxx-mnx,mxy-mny] : null;
+  ccSwatches = res.strips.reduce((a,st)=>a.concat(st.rgbs),[]);
+  libMark("colour",renderOf(c,ccBox),
           {meta:{strips:res.strips.length,
                  swatches:res.strips.map(s=>s.segs.length).join("+")}});
+  $("cc-apply").classList.remove("hidden");
+  $("cc-apply").disabled=false;
+  $("cc-apply").textContent="Apply correction";
   captureColourZoom();
   show("stage-colour");
 }
+
+// ---------- colour calibration (stage 2: correct the image) ----------------
+// Without the card's published swatch values there is no absolute colour to
+// aim at, so this corrects the one thing the card can tell us on its own: the
+// greys. Whatever the strips are, their least colourful swatches should read
+// neutral, and how far they miss is the cast the lighting put on the photo.
+// That fixes a cast; it does not make colour absolutely accurate.
+const NEUTRAL_FLOOR=25, NEUTRAL_CEIL=245;   // crushed and clipped swatches lie
+const NEUTRAL_CHROMA=25;                    // above this a swatch is a colour
+function neutralGains(rgbs){
+  const chroma=c=>Math.max(c[0],c[1],c[2])-Math.min(c[0],c[1],c[2]);
+  // a blown-out or blocked-up swatch has had its ratios destroyed by the
+  // sensor, and would drag the gains with it
+  const ok=rgbs.filter(c=>Math.min(c[0],c[1],c[2])>=NEUTRAL_FLOOR
+                       && Math.max(c[0],c[1],c[2])<=NEUTRAL_CEIL);
+  if(!ok.length) return {err:"Every swatch is either blown out or crushed — no usable grey."};
+  // Only genuinely flat swatches, not merely the flattest available. Taking
+  // the flattest third of a saturated card hands the gain to a pink patch and
+  // invents a 20% correction out of nothing.
+  const pick=ok.filter(c=>chroma(c)<=NEUTRAL_CHROMA);
+  if(!pick.length)
+    return {err:`No near-neutral swatch on this card (flattest is chroma `
+      +`${Math.round(Math.min(...ok.map(chroma)))}, needs ${NEUTRAL_CHROMA} or less) — `
+      +`nothing grey to calibrate against.`};
+  const mean=i=>pick.reduce((s,c)=>s+c[i],0)/pick.length;
+  const r=mean(0),g=mean(1),b=mean(2),t=(r+g+b)/3;
+  const gains=[t/r,t/g,t/b];
+  // a real cast is a few percent. Ten-to-one says the swatches are not greys.
+  if(gains.some(k=>!isFinite(k)||k<0.5||k>2))
+    return {err:`Correction would be extreme (${gains.map(k=>k.toFixed(2)).join("/")}) — refusing it.`};
+  return {gains, used:pick.length, of:rgbs.length,
+          worst:Math.round(Math.max(...pick.map(chroma)))};
+}
+$("cc-apply").onclick=()=>defer(()=>{
+  const n=neutralGains(ccSwatches||[]);
+  if(n.err){ $("cc-detail").textContent=n.err; show("stage-colour"); return; }
+  const c=$("ccanvas"), g=c.getContext("2d");
+  // redraw from the source: the canvas on screen carries the swatch outlines,
+  // and those must not be baked into the pixels later steps read
+  g.setTransform(1,0,0,1,0,0);
+  g.clearRect(0,0,c.width,c.height);
+  g.drawImage(ccImg,0,0);
+  const im=g.getImageData(0,0,c.width,c.height), d=im.data;
+  // three 256-entry tables, not three multiplies per pixel: this runs over
+  // every pixel of a full-resolution photo
+  const lut=n.gains.map(k=>{
+    const t=new Uint8ClampedArray(256);
+    for(let v=0;v<256;v++) t[v]=Math.round(v*k);
+    return t;
+  });
+  for(let i=0;i<d.length;i+=4){ d[i]=lut[0][d[i]]; d[i+1]=lut[1][d[i+1]]; d[i+2]=lut[2][d[i+2]]; }
+  g.putImageData(im,0,0);
+  const pct=k=>((k-1)*100).toFixed(1).replace(/^(?!-)/,"+")+"%";
+  $("cc-instruct").textContent="Colour corrected.";
+  $("cc-detail").textContent=
+    `R ${pct(n.gains[0])} · G ${pct(n.gains[1])} · B ${pct(n.gains[2])}, `
+    +`from ${n.used} neutral swatch${n.used===1?"":"es"} of ${n.of} `
+    +`(chroma ${n.worst} or less). Later steps now read the `
+    +`corrected image. Outlines removed — the picture above is what was saved.`;
+  // the corrected pixels become the working copy the next step reads
+  c.toBlob(b=>{
+    libMark("colour",renderOf(c,ccBox),
+            {work:b, meta:{gains:n.gains.map(k=>+k.toFixed(3)).join("/"), corrected:1}});
+  },"image/jpeg",0.92);
+  // applying twice would compound the gains
+  $("cc-apply").disabled=true;
+  $("cc-apply").textContent="Correction applied";
+  captureColourZoom();
+  show("stage-colour");
+});
 
 // ---------- full-screen view of one comparison photo ----------
 // Three ways out, because a full-screen overlay with no obvious exit is a
@@ -1358,23 +1497,32 @@ $("lightbox").addEventListener("click",e=>{ if(e.target===$("lightbox")) closeLi
 document.addEventListener("keydown",e=>{
   if(e.key==="Escape"&&!$("lightbox").classList.contains("hidden")) closeLightbox(); });
 
-// ---------- compare two results ----------
+// ---------- compare two or more results ----------
 $("gal-go").onclick=()=>{
   const byId=Object.fromEntries(loadResults().map(r=>[r.id,r]));
-  const pair=gsel.map(id=>byId[id]).sort((a,b)=>new Date(a.t)-new Date(b.t)); // older first
-  const [a,b]=pair;
-  $("cmp-imgs").innerHTML=pair.map((r,i)=>
-    `<div><img src="${r.crop||r.img}" alt=""><div class="cap"><b>${i?"Later":"Earlier"}</b><br>
+  const set=gsel.map(id=>byId[id]).filter(Boolean)
+               .sort((a,b)=>new Date(a.t)-new Date(b.t));   // oldest first
+  const n=set.length;
+  // The headline change is always earliest against latest; the photos in
+  // between are listed step by step underneath it.
+  const a=set[0], b=set[n-1];
+  const sgn=v=>(v>0?"+":"")+v.toFixed(1);
+  const labels = n===2 ? ["Earlier","Later"]
+    : set.map((r,i)=> i===0?"Earliest" : i===n-1?"Latest" : `#${i+1}`);
+  // Side by side for a pair, stacked for three or more (see .cmp.stack).
+  $("cmp-imgs").classList.toggle("stack", n>2);
+  $("cmp-imgs").innerHTML=set.map((r,i)=>
+    `<div><img src="${r.crop||r.img}" alt=""><div class="cap"><b>${labels[i]}</b><br>
      ${fmtDate(r.t)}<br>${r.diaMm} mm · ${r.areaMm2} mm²${
        r.crop?"":'<br><span class="grew">whole photo</span>'}</div></div>`).join("");
-  const legacy=pair.filter(r=>!r.crop).length;
+  const legacy=set.filter(r=>!r.crop).length;
   // double-tap a photo to see it full screen. Detected from pointerup rather
   // than the dblclick event so mouse and touch behave the same way.
   [...$("cmp-imgs").querySelectorAll("img")].forEach((el,i)=>{
     let last=0;
     el.addEventListener("pointerup",()=>{
       const now=Date.now();
-      if(now-last<350){ last=0; openLightbox(pair[i],i?"Later":"Earlier"); }
+      if(now-last<350){ last=0; openLightbox(set[i],labels[i]); }
       else last=now;
     });
   });
@@ -1386,31 +1534,46 @@ $("gal-go").onclick=()=>{
   // re-photographing and re-calibrating, so don't call that a change.
   const cls=Math.abs(pctDia)<10?"steady":(pctDia>0?"grew":"shrank");
   const word=Math.abs(pctDia)<10?"No clear change":(pctDia>0?"Larger":"Smaller");
-  const sgn=v=>(v>0?"+":"")+v.toFixed(1);
+  // Every photo, with the step from the one before it, so a run of small
+  // increases is visible even when the ends alone say "no clear change".
+  const series = n<3 ? "" :
+    `<div class="series">`+set.map((r,i)=>{
+      const step=i? r.diaMm-set[i-1].diaMm : null;
+      return `${labels[i]} · ${fmtDate(r.t)}: <b>${r.diaMm} mm</b> · ${r.areaMm2} mm²`+
+             (step===null?"":` (${sgn(step)} mm)`);
+    }).join("<br>")+`</div>`;
+  const crops=set.map(r=>r.cropMm);
+  const allCropped=crops.every(c=>c);
+  const sameCrop=allCropped&&crops.every(c=>c===crops[0]);
+  const cropList=[...new Set(crops.filter(Boolean))].join(" mm, ")+" mm";
+  const methods=new Set(set.map(r=>r.dm||"equiv"));
   $("cmp-delta").innerHTML=
     `<span class="big ${cls}">${word}</span>`+
+    (n>2?`<span class="hint">Across ${n} photos, earliest to latest.</span><br>`:"")+
     `Diameter: ${a.diaMm} → ${b.diaMm} mm (<b>${sgn(dDia)} mm</b>, ${sgn(pctDia)}%)<br>`+
     `Area: ${a.areaMm2} → ${b.areaMm2} mm² (<b>${sgn(dArea)} mm²</b>, ${sgn(pctArea)}%)<br>`+
-    `Time between photos: <b>${days} day${days===1?"":"s"}</b><br>`+
+    `Time ${n>2?"from first to last photo":"between photos"}: <b>${days} day${days===1?"":"s"}</b><br>`+
     `Scale used: ${a.pxPerCm} → ${b.pxPerCm} px/cm`+
+    series+
     (Math.abs(pctDia)<10?`<br><span class="hint">Differences under 10% are within
       re-measurement error — treat as unchanged.</span>`:"")+
     (legacy
-      ? `<br><span class="grew">${legacy===2?"Both measurements were":"One measurement was"}
-         saved by an older version and ${legacy===2?"are":"is"} shown as the whole photo, not a
+      ? `<br><span class="grew">${legacy===n?(n===2?"Both measurements were":"All measurements were")
+           :legacy===1?"One measurement was":`${legacy} measurements were`}
+         saved by an older version and ${legacy===1?"is":"are"} shown as the whole photo, not a
          zoomed crop — so the pictures are at different magnifications and can't be compared by
          eye. Re-measure to get matched crops. The numbers below are still valid.</span>`
       : "")+
-    (a.cropMm&&b.cropMm&&a.cropMm!==b.cropMm
-      ? `<br><span class="hint">The two crops cover ${a.cropMm} mm and ${b.cropMm} mm
+    (allCropped&&!sameCrop
+      ? `<br><span class="hint">The crops cover ${cropList}
          of skin, so they are not shown at the same magnification — compare the
          numbers rather than the pictures.</span>`
-      : (a.cropMm&&b.cropMm
-        ? `<br><span class="hint">Both crops cover ${a.cropMm} mm of skin, so
+      : (sameCrop
+        ? `<br><span class="hint">${n===2?"Both crops cover":"Every crop covers"} ${crops[0]} mm of skin, so
            they are at the same scale — the size difference you see is real.</span>` : ""))+
-    ((a.dm||"equiv")!==(b.dm||"equiv")
-      ? `<br><span class="grew">These two measured diameter differently
-         (the older one used the equal-area circle, which reads smaller), so the
+    (methods.size>1
+      ? `<br><span class="grew">${n===2?"These two":"These photos"} measured diameter differently
+         (the older ${n===2?"one":"ones"} used the equal-area circle, which reads smaller), so the
          diameter change above is not a like-for-like comparison. The area
          figures are still comparable.</span>` : "");
   show("stage-compare");

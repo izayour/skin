@@ -7,9 +7,15 @@
   body{background:#0f1216;color:#e8edf3;font:13px/1.5 ui-monospace,Consolas,monospace;margin:16px}
   pre{white-space:pre-wrap} canvas{border:1px solid #2a323c;margin:6px 6px 0 0;max-width:46%}
   .ok{color:#3ddc97} .bad{color:#ff6b5e} h1{font-size:15px}
+  .brand{height:22px;width:auto;display:block;filter:invert(1)}
+  .topbar{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+  .homelink{margin-left:auto;text-decoration:none;color:#e8edf3;background:#2e7d32;
+            border-radius:8px;padding:6px 12px;font-family:system-ui,sans-serif}
 </style>
 </head>
 <body>
+<div class="topbar"><img class="brand" src="../logo-wide.png" alt="Canary Detect">
+  <a class="homelink" href="../index.html">Main menu</a></div>
 <h1>Ruler pairing — ground-truth test</h1>
 <p>A synthetic wide shot is built from the close-up by a <b>known</b> homography, so the
 answer is known in advance. Deliberately included: a large bright rectangle standing in for the
