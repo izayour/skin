@@ -154,6 +154,7 @@ async function libCandidates(step,includeDone){
   return os.map(o=>{
       const p=byId[o.id];
       return {id:o.id, name:o.name, addedAt:o.addedAt,
+              caseId:o.caseId||null, caseName:o.caseName||null,
               w:(p||o).w, h:(p||o).h,
               thumb:p?p.preview:o.thumb,
               steps:p?p.steps:{}, processed:!!p};

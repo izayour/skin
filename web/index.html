@@ -121,7 +121,10 @@
            margin:4px 0 0; padding-top:8px; border-top:1px solid #333; }
   .ghead:first-child { border-top:0; padding-top:0; }
   .ghead .n { font-weight:400; color:#9e9e9e; }
-  .optline input { width:20px; height:20px; flex:0 0 auto; margin:0; }
+  /* Only the tick boxes. Left as a bare `input` this also sized the days
+     field on this screen down to 20px -- one digit wide -- because
+     `.optline input` outranks the class the field carries. */
+  .optline input[type=checkbox] { width:20px; height:20px; flex:0 0 auto; margin:0; }
   /* full-screen view of one comparison image. The id beats .hidden on
      specificity, so the hidden state has to be spelled out for the id too. */
   #lightbox { position:fixed; inset:0; z-index:50; background:#000000ee;
@@ -148,7 +151,7 @@
   .rowcard .rowtext { flex:1; min-width:0; }
   .rowcard .rowlab { display:block; font-size:12px; color:#9e9e9e; }
   .rowcard .rowval { display:block; font-size:17px; font-weight:700; margin-top:2px; }
-  .rowcard .chev { flex:0 0 auto; color:#9e9e9e; font-size:22px; line-height:1; }
+  .rowcard .chev, .folder .chev { flex:0 0 auto; color:#9e9e9e; font-size:22px; line-height:1; }
   .subcard { background:#262626; border-radius:10px; padding:12px 14px; margin-top:10px; }
   .subcard h3 { margin:0 0 8px; font-size:16px; }
   .checklist { margin:0; padding-left:18px; font-size:14px; color:#cfd8dc; line-height:1.5; }
@@ -159,8 +162,27 @@
              padding:11px 13px; background:#2c2a22; border-radius:10px;
              font-size:13px; color:#e6d8ae; line-height:1.45; }
   .privacy svg { flex:0 0 20px; height:20px; }
+  /* ---- image folders, one per lesion ----------------------------------- */
+  /* a folder is a row, not a tile: it spans both columns of the grid it
+     shares with the photo tiles */
+  .folder { grid-column:1/-1; display:flex; align-items:center; gap:12px;
+            width:100%; text-align:left; background:#262626; color:#eee;
+            padding:10px; margin-top:8px; }
+  .folder img { flex:0 0 56px; width:56px; height:56px; object-fit:cover;
+                border-radius:8px; display:block; background:#111; }
+  .folder .ftext { flex:1; min-width:0; }
+  .folder .fname { display:block; font-size:15px; font-weight:700; }
+  .folder .fsub { display:block; font-size:12px; font-weight:400; color:#9e9e9e;
+                  margin-top:3px; }
+  /* Inside a folder the photos are one per row, full width -- these are of the
+     same lesion months apart, and a half-width tile is too small to see a
+     change in. Capped so one photo is not a whole screenful, and contained
+     rather than cropped, since the edge of a lesion is the point. */
+  .gallery.one { grid-template-columns:1fr; max-height:none; }
+  .gallery.one .gitem img { max-height:34vh; object-fit:contain; background:#111; }
+  #pick-lib { max-height:50vh; overflow-y:auto; margin-top:6px; }
   /* the days-until-due box, on the settings line it belongs to */
-  .daysfield { width:76px; flex:0 0 76px; margin-top:0; text-align:center;
+  .daysfield { width:82px; flex:0 0 82px; margin-top:0; text-align:center;
                padding:9px 6px; }
 </style>
 </head>
@@ -322,6 +344,12 @@
     <div class="row tight"><button id="pick-cam">Take a photo</button>
       <button id="pick-file" class="secondary">From device</button>
       <button id="pick-demo" class="secondary">Demo photo</button></div>
+    <!-- Photos already in the library that this step has not been run on. Only
+         offered where running a step on an existing photo is the normal thing
+         to do -- colour calibration, which corrects a photo for the steps that
+         come after it. -->
+    <p class="hint hidden" id="pick-libhead"></p>
+    <div class="gallery one hidden" id="pick-lib"></div>
   </section>
 
   <!-- Which lesion the photo is of. Asked at import, because that is the only
@@ -358,6 +386,8 @@
       <button id="tab-proc" class="tab">Processed</button></div>
     <p class="instruct" id="lib-instruct">Pick an image to see what has been done to it.</p>
     <div class="gallery" id="library"></div>
+    <!-- at the end of a lesion's photos, the obvious next thing to do with it -->
+    <button id="lib-newphoto" class="hidden">Take new photos</button>
     <div class="row tight"><button id="lib-steps" disabled>Steps</button>
       <button id="lib-del" class="danger" disabled>Delete</button>
       <button id="lib-back" class="secondary">Back</button></div>
@@ -377,6 +407,11 @@
     <span class="badge">Colour calibration</span>
     <p class="instruct" id="cc-instruct">Looking for the card's colour strips…</p>
     <canvas id="ccanvas"></canvas>
+    <!-- What the correction did, once it has been applied: the same photo as
+         taken and as corrected. Percentages per channel do not tell anyone
+         whether their photo now looks right; the pair does. -->
+    <div class="cmp hidden" id="cc-cmp"></div>
+    <p class="hint hidden" id="cc-cmphint">Tap either photo to see it full screen.</p>
     <p class="hint" id="cc-detail"></p>
     <div class="row tight"><button id="cc-apply" class="hidden">Apply correction</button>
       <button id="cc-again" class="secondary">Another image</button>
@@ -462,11 +497,11 @@
   </div>
 </main>
 
-<script src="js/pipeline.js?v=87"></script>
-<script src="js/ruler.js?v=87"></script>
-<script src="js/genruler.js?v=87"></script>
-<script src="js/skinopus.js?v=87"></script>
-<script src="js/library.js?v=87"></script>
+<script src="js/pipeline.js?v=90"></script>
+<script src="js/ruler.js?v=90"></script>
+<script src="js/genruler.js?v=90"></script>
+<script src="js/skinopus.js?v=90"></script>
+<script src="js/library.js?v=90"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
@@ -511,7 +546,8 @@ const show=id=>{
   // it used to hang off "New photo" alone, so returning any other way left a
   // finished measurement uncounted.
   // back at the menu, last run's message has been read or abandoned
-  if(id==="stage-capture"){ setStatus(""); updateCompareUI(); libUpdateUI(); updateDueUI(); }
+  if(id==="stage-capture"){ setStatus(""); forceCase=null;
+    updateCompareUI(); libUpdateUI(); updateDueUI(); }
   disarmAll();     // a half-pressed delete must not wait on another screen
 };
 // clears the last message: whatever it said is about to be answered by this run
@@ -776,6 +812,9 @@ const esc=v=>String(v==null?"":v).replace(/[&<>"]/g,
 
 // The image waiting to be filed, and what to do once it is.
 let caseRec=null, caseThen=null;
+// Set when the run was started from inside a lesion's folder: the answer to
+// "which lesion?" is already known, so the question is not asked.
+let forceCase=null;
 // The lesion the run in progress belongs to, copied onto its measurement.
 let currentCase=null;
 const CASE_ASK="Is this a new lesion, or another photo of one you have measured before?";
@@ -813,6 +852,7 @@ function renderCaseList(){
 // only one answer, so skip it and go straight to naming.
 function askCase(rec,then){
   caseRec=rec; caseThen=then;
+  if(forceCase){ const c=forceCase; forceCase=null; chooseCase(c); return; }
   $("case-name").value=""; $("case-save").disabled=true;
   caseMode(loadCases().length?"choice":"new");
   show("stage-case");
@@ -975,17 +1015,66 @@ function sourceSentence(){
   const list=w.length===1?w[0]:w.slice(0,-1).join(", ")+" or "+w[w.length-1];
   return list[0].toUpperCase()+list.slice(1)+".";
 }
-function openPicker(step,title,note,then){
+// `libNote`, when given, adds the photos already in the library that this step
+// has NOT been run on. Deliberately not offered for every step: a measurement
+// starts from a fresh photo, and the grid of old ones was taken off that screen
+// on purpose. Colour calibration is the exception -- it exists to fix a photo
+// for the steps that come after it, so running it on one already imported is
+// the normal case, not a shortcut.
+function openPicker(step,title,note,then,libNote){
   pickStep=step; pickThen=then;
+  // Cleared before the shortcut below can return: a list left over from the
+  // last step would still be sitting on this screen the next time it is shown.
+  $("pick-lib").innerHTML="";
+  $("pick-lib").classList.add("hidden");
+  $("pick-libhead").classList.add("hidden");
   const srcs=sourceButtons();
   // One way in is not a choice. Trigger it and never show this screen at all:
   // the stage the user pressed the button on stays put, so cancelling the file
   // dialog leaves them there rather than on a page with a single option.
-  if(srcs.length===1){ srcs[0].click(); return; }
+  // Never when the library is on offer too -- then there is a choice to make.
+  if(srcs.length===1&&!libNote){ srcs[0].click(); return; }
   $("pick-badge").textContent=title;
   $("pick-instruct").textContent=note+sourceSentence();
   $("pick-tip").classList.toggle("hidden",$("pick-cam").classList.contains("hidden"));
+  // filled in when it arrives: reading the library is a trip to IndexedDB, and
+  // the screen should not wait on it
+  if(libNote) renderPickLib(step,libNote);
   show("stage-pick");
+}
+// Grouped by lesion, one photo per row, exactly as the libraries show them --
+// and filtered to the ones this step has not been run on, which is the whole
+// point of listing them here.
+async function renderPickLib(step,note){
+  const cands=await libCandidates(step);
+  if(pickStep!==step) return;                 // the screen moved on while we read
+  const box=$("pick-lib"), head=$("pick-libhead");
+  head.textContent = cands.length ? note
+    : "Every photo you have has already had this step run on it.";
+  head.classList.remove("hidden");
+  box.innerHTML="";
+  box.classList.toggle("hidden",!cands.length);
+  const groups=[];
+  cands.forEach(r=>{
+    const key=r.caseId||FOLDER_NONE, name=r.caseName||FOLDER_NONE_NAME;
+    let g=groups.find(x=>x.key===key);
+    if(!g) groups.push(g={key,name,items:[]});
+    g.items.push(r);
+  });
+  groups.forEach(grp=>{
+    const h=document.createElement("div");
+    h.className="ghead"; h.textContent=grp.name;
+    box.appendChild(h);
+    grp.items.forEach(r=>{
+      const d=document.createElement("div");
+      d.className="gitem";
+      d.innerHTML=`<img src="${r.thumb}" alt="">
+        <div class="meta">${fmtDate(r.addedAt)} · ${r.w}×${r.h}
+        <div class="tags">${stepTags(r.steps)}</div></div>`;
+      d.onclick=()=>usePicked(r.id);
+      box.appendChild(d);
+    });
+  });
 }
 // the steps a lineage already carries -- "Standard" when it carries none
 function stepTags(steps){
@@ -1117,7 +1206,7 @@ $("pick-demo").onclick=async()=>{
     const rec=await libImport(b,"demo:half.jpg");
     // Not anybody's lesion, so it is not worth asking about: it files itself
     // under one fixed name, which still lets two demo runs be compared.
-    const c=addCase("Demo photo");
+    const c=addCase("Demo photo"); forceCase=null;
     rec.caseId=c.id; rec.caseName=c.name; currentCase={id:c.id,name:c.name};
     await libPut("originals",rec);
     await usePicked(rec.id);
@@ -1140,7 +1229,9 @@ async function usePicked(id){
 
 const pickForMeasure=()=>openPicker("area","Measure a lesion","",startMeasure);
 const pickForColour=()=>openPicker("colour","Colour calibration",
-  "The photo needs the card's colour strips in it. ",startColour);
+  "The photo needs the card's colour strips in it. ",startColour,
+  "Or run it on a photo you already have. Only the ones that have not been "
+  +"colour calibrated are listed:");
 $("go-measure").onclick=pickForMeasure;
 $("cc-open").onclick=pickForColour;
 
@@ -1787,41 +1878,108 @@ async function libUpdateUI(){
     : "Image libraries — empty";
 }
 
-let libSel=null, libTab="proc";
+// Photos of one lesion belong together, so the library opens on folders --
+// one per lesion, named by where it is on the body -- and a folder opens on
+// that lesion's photos alone. The lesion is recorded on the ORIGINAL; a
+// processed record shares its id, so one lookup serves both tabs.
+const FOLDER_NONE="__unfiled", FOLDER_NONE_NAME="Not filed under a lesion";
+let libSel=null, libTab="proc", libFolder=null, libFolderName="";
+function libFolderCase(){
+  return libFolder&&libFolder!==FOLDER_NONE ? {id:libFolder,name:libFolderName} : null;
+}
 async function renderLibrary(){
   const store=libTab==="orig"?"originals":"processed";
-  const list=(await libAll(store)).sort((a,b)=>new Date(b.addedAt)-new Date(a.addedAt));
+  const [rows,origs]=await Promise.all([libAll(store),libAll("originals")]);
+  const list=rows.sort((a,b)=>new Date(b.addedAt)-new Date(a.addedAt));
+  const folderOf=Object.fromEntries(origs.map(o=>
+    [o.id,{id:o.caseId||FOLDER_NONE, name:o.caseName||FOLDER_NONE_NAME}]));
   $("tab-orig").classList.toggle("on",libTab==="orig");
   $("tab-proc").classList.toggle("on",libTab==="proc");
   const g=$("library");
-  if(!list.some(r=>r.id===libSel)) libSel=null;
-  g.innerHTML=list.length?"":`<p class="hint">${libTab==="orig"
-    ? "No images imported yet."
-    : "Nothing processed yet — run a step on an image and its result appears here."}</p>`;
-  list.forEach(r=>{
-    const d=document.createElement("div");
-    d.className="gitem"+(libSel===r.id?" sel":"");
-    d.innerHTML=`<img src="${libTab==="orig"?r.thumb:r.preview}" alt="">
-      <div class="meta">${r.name}<br>${fmtDate(r.addedAt)} · ${r.w}×${r.h}
-      ${libTab==="orig"?"" :`<div class="tags">${stepTags(r.steps)}</div>`}
-      ${libSel===r.id?'<div class="pick">selected</div>':""}</div>`;
-    d.onclick=()=>{libSel=(libSel===r.id?null:r.id);renderLibrary();};
-    g.appendChild(d);
-  });
+  g.innerHTML="";
+  g.classList.toggle("one",!!libFolder);          // inside a folder: one column
+  const empty = libTab==="orig" ? "No images imported yet."
+    : "Nothing processed yet — run a step on an image and its result appears here.";
+
+  if(!libFolder){
+    // ---- the folders themselves ----
+    libSel=null;
+    const groups=[];
+    list.forEach(r=>{
+      const f=folderOf[r.id]||{id:FOLDER_NONE,name:FOLDER_NONE_NAME};
+      let grp=groups.find(x=>x.id===f.id);
+      if(!grp) groups.push(grp={id:f.id,name:f.name,items:[]});
+      grp.items.push(r);
+    });
+    if(!groups.length) g.innerHTML=`<p class="hint">${empty}</p>`;
+    groups.forEach(grp=>{
+      const newest=grp.items[0];
+      const b=document.createElement("button");
+      b.className="folder";
+      const im=document.createElement("img");
+      im.src=(libTab==="orig"?newest.thumb:newest.preview)||"";
+      im.alt="";
+      const t=document.createElement("span"); t.className="ftext";
+      const nm=document.createElement("span"); nm.className="fname"; nm.textContent=grp.name;
+      const sub=document.createElement("span"); sub.className="fsub";
+      sub.textContent=`${grp.items.length} photo${grp.items.length===1?"":"s"}`
+                     +` · latest ${fmtDate(newest.addedAt)}`;
+      t.appendChild(nm); t.appendChild(sub);
+      const ch=document.createElement("span"); ch.className="chev"; ch.textContent="›";
+      b.appendChild(im); b.appendChild(t); b.appendChild(ch);
+      b.onclick=()=>{ libFolder=grp.id; libFolderName=grp.name; libSel=null; renderLibrary(); };
+      g.appendChild(b);
+    });
+  }else{
+    // ---- one lesion's photos, newest first ----
+    const items=list.filter(r=>(folderOf[r.id]||{id:FOLDER_NONE}).id===libFolder);
+    if(!items.some(r=>r.id===libSel)) libSel=null;
+    if(!items.length) g.innerHTML=`<p class="hint">${empty}</p>`;
+    items.forEach(r=>{
+      const d=document.createElement("div");
+      d.className="gitem"+(libSel===r.id?" sel":"");
+      d.innerHTML=`<img src="${libTab==="orig"?r.thumb:r.preview}" alt="">
+        <div class="meta">${r.name}<br>${fmtDate(r.addedAt)} · ${r.w}×${r.h}
+        ${libTab==="orig"?"" :`<div class="tags">${stepTags(r.steps)}</div>`}
+        ${libSel===r.id?'<div class="pick">selected</div>':""}</div>`;
+      d.onclick=()=>{libSel=(libSel===r.id?null:r.id);renderLibrary();};
+      g.appendChild(d);
+    });
+  }
+
   disarmLibDel();                       // the selection just changed under it
+  // Steps and Delete act on a selected photo, which only exists inside a folder.
   $("lib-steps").disabled=libSel===null||libTab==="orig";
-  $("lib-steps").classList.toggle("hidden",libTab==="orig");
+  $("lib-steps").classList.toggle("hidden",libTab==="orig"||!libFolder);
   $("lib-del").disabled=libSel===null;
+  $("lib-del").classList.toggle("hidden",!libFolder);
   $("lib-del").textContent=libTab==="orig"?"Delete":"Undo processing";
-  $("lib-instruct").textContent = libTab==="orig"
-    ? "The images as imported. Nothing here is ever altered by a processing step."
-    : (libSel===null ? "Each image as it stands after every step applied to it."
-                     : "Tap Steps to see what was done to this image.");
+  $("lib-newphoto").classList.toggle("hidden",!libFolder);
+  $("lib-back").textContent=libFolder?"Back to lesions":"Back";
+  $("lib-instruct").textContent = !libFolder
+    ? "One folder per lesion. Open one to see every photo of it."
+    : libTab==="orig"
+      ? `${libFolderName} — the photos as imported. Nothing here is ever altered by a step.`
+      : (libSel===null ? `${libFolderName} — each photo as it stands after every step applied to it.`
+                       : "Tap Steps to see what was done to this photo.");
 }
 $("tab-orig").onclick=()=>{libTab="orig";libSel=null;renderLibrary();};
 $("tab-proc").onclick=()=>{libTab="proc";libSel=null;renderLibrary();};
-$("lib-open").onclick=()=>{libSel=null;renderLibrary();show("stage-library");};
-$("lib-back").onclick=()=>show("stage-capture");
+$("lib-open").onclick=()=>{libSel=null;libFolder=null;renderLibrary();show("stage-library");};
+// One step back at a time: out of a folder first, then off the screen.
+$("lib-back").onclick=()=>{
+  if(libFolder){ libFolder=null; libSel=null; renderLibrary(); return; }
+  show("stage-capture");
+};
+// Straight into a measurement on this lesion, with the "which lesion?"
+// question already answered by the folder it was started from.
+$("lib-newphoto").onclick=()=>{
+  const c=libFolderCase();
+  if(!c){ pickForMeasure(); return; }
+  forceCase=c;
+  openPicker("area",`New photo — ${c.name}`,
+             `This photo will be filed under “${c.name}”. `,startMeasure);
+};
 // In Standard the whole lineage goes; in Processed only the steps go, putting
 // the original back on offer everywhere.
 const disarmLibDel=armable($("lib-del"),
@@ -1871,11 +2029,37 @@ $("steps-back").onclick=()=>{renderLibrary();show("stage-library");};
 // swatches are right, so this screen exists to check them: the reference
 // reports 9+10 on half.jpg and 18+18 on l1-cropped.jpg and l2.jpg.
 let ccImg=null, ccSwatches=null, ccBox=null;
+// The photo as it arrived, kept from before anything is drawn on the canvas:
+// by the time the correction runs, the canvas has carried swatch outlines.
+let ccBefore=null;
+const CC_CMP_PX=760;
+// Side by side, the way two photos of the same lesion are compared elsewhere
+// in the app. The canvas steps aside for it -- it is showing the same corrected
+// pixels as the right-hand image, only bigger and with no "before" to read it
+// against.
+function showColourCompare(after,capAfter){
+  const box=$("cc-cmp");
+  box.innerHTML=
+    `<div><img src="${ccBefore}" alt=""><div class="cap"><b>Before</b><br>as photographed</div></div>`
+   +`<div><img src="${after}" alt=""><div class="cap"><b>After</b><br>${capAfter}</div></div>`;
+  const caps=["<b>Before</b> — the photo as it was taken",
+              "<b>After</b> — colour corrected"];
+  [...box.querySelectorAll("img")].forEach((el,i)=>{
+    el.onclick=()=>openImage(el.src,caps[i]);
+  });
+  box.classList.remove("hidden");
+  $("cc-cmphint").classList.remove("hidden");
+  $("ccanvas").classList.add("hidden");
+}
 const captureColourZoom=setupSnapshotZoom("ccanvas");
 $("cc-again").onclick=pickForColour;
 $("cc-back").onclick=()=>show("stage-capture");
 function startColour(im){
   ccImg=im; ccSwatches=null; ccBox=null;
+  ccBefore=libThumb(im,im.naturalWidth,im.naturalHeight,CC_CMP_PX);
+  $("ccanvas").classList.remove("hidden");
+  $("cc-cmp").classList.add("hidden"); $("cc-cmp").innerHTML="";
+  $("cc-cmphint").classList.add("hidden");
   $("cc-apply").classList.add("hidden");
   $("cc-instruct").textContent="Looking for the card's colour strips…";
   $("cc-detail").textContent="";
@@ -1997,11 +2181,13 @@ $("cc-apply").onclick=()=>defer(()=>{
   g.putImageData(im,0,0);
   const pct=k=>((k-1)*100).toFixed(1).replace(/^(?!-)/,"+")+"%";
   $("cc-instruct").textContent="Colour corrected.";
+  // the corrected pixels, clean of the swatch outlines, as the "after" half
+  showColourCompare(libThumb(c,c.width,c.height,CC_CMP_PX),
+                    `R ${pct(n.gains[0])} · G ${pct(n.gains[1])} · B ${pct(n.gains[2])}`);
   $("cc-detail").textContent=
-    `R ${pct(n.gains[0])} · G ${pct(n.gains[1])} · B ${pct(n.gains[2])}, `
-    +`from ${n.used} neutral swatch${n.used===1?"":"es"} of ${n.of} `
+    `From ${n.used} neutral swatch${n.used===1?"":"es"} of ${n.of} `
     +`(chroma ${n.worst} or less). Later steps now read the `
-    +`corrected image. Outlines removed — the picture above is what was saved.`;
+    +`corrected image — the right-hand picture is what was saved.`;
   // the corrected pixels become the working copy the next step reads
   c.toBlob(b=>{
     libMark("colour",renderOf(c,ccBox),
