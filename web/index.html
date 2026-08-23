@@ -134,6 +134,34 @@
             margin-top:12px; }
   #lightbox button { max-width:340px; margin-top:14px; }
   .cmp img { cursor:zoom-in; }
+  /* ---- the after-measurement screen ------------------------------------ */
+  .tracktop { text-align:center; padding:6px 0 2px; }
+  .shield { width:58px; height:58px; display:block; margin:0 auto 10px; }
+  .tracktop h2 { margin:0 0 6px; font-size:22px; }
+  .tracksub { margin:0; font-size:14px; color:#bdbdbd; line-height:1.55; }
+  .tracksub b { color:#e8e8e8; }
+  /* a card that is also a button: the date and the way to change it are one
+     target, which is what the chevron is promising */
+  .rowcard { display:flex; align-items:center; gap:12px; width:100%;
+             text-align:left; background:#262626; color:#eee; padding:12px; }
+  .rowcard .ico { flex:0 0 26px; height:26px; color:#a5d6a7; }
+  .rowcard .rowtext { flex:1; min-width:0; }
+  .rowcard .rowlab { display:block; font-size:12px; color:#9e9e9e; }
+  .rowcard .rowval { display:block; font-size:17px; font-weight:700; margin-top:2px; }
+  .rowcard .chev { flex:0 0 auto; color:#9e9e9e; font-size:22px; line-height:1; }
+  .subcard { background:#262626; border-radius:10px; padding:12px 14px; margin-top:10px; }
+  .subcard h3 { margin:0 0 8px; font-size:16px; }
+  .checklist { margin:0; padding-left:18px; font-size:14px; color:#cfd8dc; line-height:1.5; }
+  .checklist li { margin-bottom:7px; }
+  .checklist li:last-child { margin-bottom:0; }
+  /* warm, like the paper note it is: this is reassurance, not a warning */
+  .privacy { display:flex; align-items:center; gap:10px; margin:10px 0 0;
+             padding:11px 13px; background:#2c2a22; border-radius:10px;
+             font-size:13px; color:#e6d8ae; line-height:1.45; }
+  .privacy svg { flex:0 0 20px; height:20px; }
+  /* the days-until-due box, on the settings line it belongs to */
+  .daysfield { width:76px; flex:0 0 76px; margin-top:0; text-align:center;
+               padding:9px 6px; }
 </style>
 </head>
 <body>
@@ -143,6 +171,9 @@
   <div id="status" class="card">Loading OpenCV.js…</div>
 
   <section id="stage-capture" class="card hidden">
+    <!-- Anything whose next photo has come due. A page cannot wake itself up
+         after a month, so the way in is also where the app finds out. -->
+    <p class="warn hidden" id="due-note"></p>
     <p class="hint">Pick a processing step. Each one asks which image to run it
       on, and offers the images it hasn't been run on yet.</p>
     <button id="go-measure">Measure a lesion</button>
@@ -168,6 +199,11 @@
     <label class="optline"><input type="checkbox" id="set-demo">
       <span>Show <b>Demo photo</b> — a sample image to try a step on without
       taking one.</span></label>
+    <label class="optline" style="align-items:center">
+      <input id="set-days" class="tfield daysfield" type="number" min="1" max="365" step="1">
+      <span><b>Days until the next photo is due.</b> Counted from the day a
+      lesion was last measured — 30 is about a month. Changing this moves every
+      reminder that has not come round yet.</span></label>
     <div style="margin-top:14px">
       <span class="hint"><span id="faillog-count">0</span> failed detection(s) logged.</span>
       <div class="row"><button id="faillog-copy" class="secondary">Copy failure log</button>
@@ -371,8 +407,53 @@
     <span class="badge" id="final-method">Result</span>
     <canvas id="fcanvas"></canvas>
     <div class="stats" id="fstats"></div>
+    <button id="track-open">Done</button>
     <div class="row tight"><button id="restart" class="secondary">New photo</button>
       <button id="redo-scale" class="danger">Reject &amp; redo scale</button></div>
+  </section>
+
+  <!-- Where a finished measurement lands: when to come back, and what would
+       make coming back sooner the right call. The date is the measurement's
+       day plus the interval in Settings, so it is only knowable here, at the
+       end of a run. -->
+  <section id="stage-track" class="card hidden">
+    <div class="tracktop">
+      <svg class="shield" viewBox="0 0 24 24" aria-hidden="true">
+        <path fill="#2e7d32" d="M12 2 4 5.2v6.3c0 4.9 3.4 9.1 8 10.5 4.6-1.4 8-5.6 8-10.5V5.2L12 2z"/>
+        <path fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"
+              stroke-linejoin="round" d="M8.2 12.2l2.6 2.6 5-5.2"/>
+      </svg>
+      <h2>Keep Tracking</h2>
+      <p class="tracksub"><b>Consistency is key.</b><br>
+        Regular monitoring helps you spot changes early.</p>
+    </div>
+    <button id="track-next" class="rowcard">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true" fill="none"
+           stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <rect x="3" y="5" width="18" height="16" rx="2"/>
+        <path d="M3 10h18M8 3v4M16 3v4"/>
+      </svg>
+      <span class="rowtext"><span class="rowlab">Next Reminder</span>
+        <span class="rowval" id="track-date">—</span></span>
+      <span class="chev">›</span>
+    </button>
+    <div class="subcard">
+      <h3>When to Get Checked</h3>
+      <ul class="checklist">
+        <li>If the lesion changes in size, shape, or colour</li>
+        <li>If it itches, bleeds, or becomes painful</li>
+        <li>If you have any concerns, consult a healthcare professional.</li>
+      </ul>
+    </div>
+    <p class="privacy">
+      <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor"
+           stroke-width="1.8" stroke-linecap="round">
+        <rect x="4" y="10" width="16" height="11" rx="2"/>
+        <path d="M8 10V7a4 4 0 0 1 8 0v3"/>
+      </svg>
+      Your photos are private and stored securely on your device.</p>
+    <p class="hint hidden" id="track-note"></p>
+    <button id="track-notify" class="hidden">Turn on reminder notifications</button>
   </section>
   <div id="lightbox" class="hidden">
     <img id="lb-img" alt="">
@@ -381,11 +462,11 @@
   </div>
 </main>
 
-<script src="js/pipeline.js?v=86"></script>
-<script src="js/ruler.js?v=86"></script>
-<script src="js/genruler.js?v=86"></script>
-<script src="js/skinopus.js?v=86"></script>
-<script src="js/library.js?v=86"></script>
+<script src="js/pipeline.js?v=87"></script>
+<script src="js/ruler.js?v=87"></script>
+<script src="js/genruler.js?v=87"></script>
+<script src="js/skinopus.js?v=87"></script>
+<script src="js/library.js?v=87"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
@@ -404,7 +485,7 @@ const APP_VERSION=(()=>{
   return m?m[1]:"?";
 })();
 $("appver").textContent=`v${APP_RELEASE} (build ${APP_VERSION})`;
-const STAGES=["stage-capture","stage-settings","stage-case","stage-box","stage-lmanual","stage-review","stage-rulerbox","stage-ticks","stage-blurry","stage-final","stage-genruler","stage-colour","stage-pick","stage-library","stage-steps","stage-gallery","stage-compare","spinner"];
+const STAGES=["stage-capture","stage-settings","stage-case","stage-track","stage-box","stage-lmanual","stage-review","stage-rulerbox","stage-ticks","stage-blurry","stage-final","stage-genruler","stage-colour","stage-pick","stage-library","stage-steps","stage-gallery","stage-compare","spinner"];
 // Two taps instead of confirm(), for the same reason the reset button uses
 // them: a muted dialog reports "cancelled" and the button dies quietly.
 const _disarms=[];
@@ -430,7 +511,7 @@ const show=id=>{
   // it used to hang off "New photo" alone, so returning any other way left a
   // finished measurement uncounted.
   // back at the menu, last run's message has been read or abandoned
-  if(id==="stage-capture"){ setStatus(""); updateCompareUI(); libUpdateUI(); }
+  if(id==="stage-capture"){ setStatus(""); updateCompareUI(); libUpdateUI(); updateDueUI(); }
   disarmAll();     // a half-pressed delete must not wait on another screen
 };
 // clears the last message: whatever it said is about to be answered by this run
@@ -450,7 +531,7 @@ function onOpenCvReady(){cvReady=true;setStatus("");show("stage-capture");
   // the pre-2.1 single library lived in localStorage and is superseded by the
   // originals/processed pair in IndexedDB -- drop it so it isn't holding quota
   try{ localStorage.removeItem("library"); }catch(e){}
-  applySettings();updateFailUI();updateCompareUI();libUpdateUI();}
+  applySettings();updateFailUI();updateCompareUI();libUpdateUI();updateDueUI();}
 let imgName="(none)";
 
 // screen -> image pixels. With a view, undo its scale/offset so callers keep
@@ -765,6 +846,117 @@ $("case-cancel").onclick=async()=>{
   if(rec){ try{ await libForget(rec.id); libUpdateUI(); }catch(e){} }
 };
 
+// ---------- when the next photo is due -------------------------------------
+// A reminder is a DAY, not a moment: "the 27th" survives a timezone and a
+// clock change, where an ISO timestamp shifts by a day either side of UTC
+// midnight. So dates are held as YYYY-MM-DD, which also compares correctly
+// as a plain string.
+const REMIND_DEFAULT=30, REMIND_MIN=1, REMIND_MAX=365;
+const dayKey=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`
+                +`-${String(d.getDate()).padStart(2,"0")}`;
+const parseDay=s=>{const [y,m,d]=s.split("-").map(Number); return new Date(y,m-1,d);};
+const addDays=(from,n)=>{const x=new Date(from); x.setHours(0,0,0,0);
+                         x.setDate(x.getDate()+n); return x;};
+function reminderDays(){
+  const n=parseInt(settings.reminderDays,10);
+  return (n>=REMIND_MIN&&n<=REMIND_MAX)?n:REMIND_DEFAULT;
+}
+// Derived, never stored: the interval is a setting, so changing it has to move
+// every reminder that has not come round yet. Storing the due date instead
+// would freeze each one at the interval that happened to be set that day.
+function caseDue(c){
+  return c&&c.lastMeasuredAt ? dayKey(addDays(new Date(c.lastMeasuredAt),reminderDays())) : null;
+}
+// A measurement restarts that lesion's clock -- and clears the record of
+// having announced the last one, so the new date can be announced in turn.
+function markMeasured(id){
+  const l=loadCases(), c=l.find(x=>x.id===id);
+  if(!c) return null;
+  c.lastMeasuredAt=new Date().toISOString();
+  delete c.notifiedFor;
+  writeCases(l);
+  return caseDue(c);
+}
+
+// A web page cannot wake itself up a month later: there is no server to push
+// from and nothing runs while the tab is closed. What it can do is show a
+// notification the moment it is opened on or after the day, and say so in the
+// app either way -- so the reminder is never silently lost, whatever the
+// browser allows. The service worker exists only for showNotification, which
+// on Android cannot be called any other way; it deliberately has no fetch
+// handler, because a caching worker is exactly how this app's pages go stale.
+let swReg=null;
+if("serviceWorker" in navigator)
+  navigator.serviceWorker.register("sw.js").then(r=>{swReg=r;}).catch(()=>{});
+const canNotify=()=>"Notification" in window && Notification.permission==="granted";
+function notifyDue(list){
+  if(!canNotify()) return;
+  const one=list.length===1;
+  const title=one?"A new photo is due":`${list.length} lesions are due a new photo`;
+  const body=one
+    ? `${list[0].name} — take the next photo and compare it with the last one.`
+    : list.map(c=>c.name).join(", ");
+  // one tag, so opening the app twice does not stack up notifications
+  const opts={body, tag:"canary-due", renotify:false, icon:"logo.png", badge:"logo.png"};
+  try{ if(swReg&&swReg.showNotification) swReg.showNotification(title,opts);
+       else new Notification(title,opts); }catch(e){}
+}
+// Everything due today or overdue, announcing the ones not announced yet.
+function checkReminders(){
+  const today=dayKey(new Date());
+  const l=loadCases();
+  const due=l.filter(c=>{const d=caseDue(c); return d&&d<=today;});
+  const fresh=due.filter(c=>c.notifiedFor!==caseDue(c));
+  if(fresh.length&&canNotify()){
+    notifyDue(fresh);
+    fresh.forEach(c=>{c.notifiedFor=caseDue(c);});
+    writeCases(l);
+  }
+  return due;
+}
+function updateDueUI(){
+  const due=checkReminders(), n=$("due-note");
+  n.classList.toggle("hidden",!due.length);
+  n.textContent = !due.length ? ""
+    : due.length===1 ? `“${due[0].name}” is due a new photo — take one to compare with the last.`
+    : `${due.length} lesions are due a new photo: ${due.map(c=>c.name).join(", ")}.`;
+}
+
+// ---------- the screen a finished measurement lands on ---------------------
+function trackDue(){
+  // The lesion just measured. An image filed under no lesion (only possible
+  // for one imported before lesions existed) still gets an honest answer to
+  // "when should I come back", it just has nothing to hang a reminder on.
+  const c=currentCase&&loadCases().find(x=>x.id===currentCase.id);
+  return caseDue(c)||dayKey(addDays(new Date(),reminderDays()));
+}
+function updateTrackUI(){
+  const st="Notification" in window ? Notification.permission : "unsupported";
+  $("track-notify").classList.toggle("hidden",st!=="default");
+  const msg =
+      st==="granted" ? "You will be notified when it is due, as soon as the app is opened that day."
+    : st==="denied"  ? "Notifications are blocked for this site in your browser settings, so the "
+                      +"reminder will only appear here in the app."
+    : st==="unsupported" ? "This browser cannot show notifications, so the reminder will appear "
+                      +"here in the app."
+    : "";
+  $("track-note").textContent=msg;
+  $("track-note").classList.toggle("hidden",!msg);
+}
+function showTracking(){
+  $("track-date").textContent=fmtDate(parseDay(trackDue()));
+  updateTrackUI();
+  show("stage-track");
+}
+$("track-open").onclick=showTracking;
+// The date is the interval plus a measurement date, and the interval is a
+// setting -- so the way to change the date is to go where it lives.
+$("track-next").onclick=()=>show("stage-settings");
+$("track-notify").onclick=async()=>{
+  try{ await Notification.requestPermission(); }catch(e){}
+  updateTrackUI();
+};
+
 // ---------- where the image for a step comes from --------------------------
 // Every processing entry point goes through here. It used to also show the
 // library as a grid of thumbnails with a "Use this image" button; that is gone.
@@ -807,7 +999,7 @@ function stepTags(steps){
 // calibration is a step for the card, not for a plain lesion photo. Turning
 // one on only makes its button appear -- the code behind it never went away.
 const SETTINGS_KEY="settings";
-const DEFAULTS={trace:false,colour:false,demo:false};
+const DEFAULTS={trace:false,colour:false,demo:false,reminderDays:REMIND_DEFAULT};
 function loadSettings(){
   try{ return {...DEFAULTS,...JSON.parse(localStorage.getItem(SETTINGS_KEY)||"{}")}; }
   catch(e){ return {...DEFAULTS}; }
@@ -821,6 +1013,7 @@ function applySettings(){
   $("set-trace").checked=settings.trace;
   $("set-colour").checked=settings.colour;
   $("set-demo").checked=settings.demo;
+  $("set-days").value=reminderDays();
 }
 function setOption(k,v){
   settings[k]=v;
@@ -830,6 +1023,14 @@ function setOption(k,v){
 $("set-trace").onchange=e=>setOption("trace",e.target.checked);
 $("set-colour").onchange=e=>setOption("colour",e.target.checked);
 $("set-demo").onchange=e=>setOption("demo",e.target.checked);
+// Clamped rather than rejected: an empty or silly box becomes the nearest
+// number that means something, and the field is corrected on screen to match.
+$("set-days").onchange=e=>{
+  const n=Math.round(Number(e.target.value));
+  setOption("reminderDays", isFinite(n)&&n ? Math.min(REMIND_MAX,Math.max(REMIND_MIN,n))
+                                           : REMIND_DEFAULT);
+  updateDueUI();                 // a shorter interval can make something due now
+};
 $("settings-open").onclick=()=>{ updateFailUI(); disarmReset(); show("stage-settings"); };
 $("set-back").onclick=()=>{ disarmReset(); show("stage-capture"); };
 // Wipe. Everything the app has put on this device lives in two places: the
@@ -1360,6 +1561,7 @@ function finalize(p){
     `Equivalent circle: ${equivDia.toFixed(1)} mm<br>`+
     `Scale: ${p.pxPerCm.toFixed(0)} px/cm<br>Lesion area: ${Math.round(lesion.areaPx).toLocaleString()} px`;
   const saved=storeResult(areaMm2,dia,p.pxPerCm,crop);
+  if(currentCase) markMeasured(currentCase.id);   // next photo is due from today
   $("fstats").innerHTML+=saved
     ? `<br><span class="steady">Saved for comparison.</span>`
     : `<br><span class="grew">Couldn't save (storage full).</span>`;
