@@ -104,6 +104,23 @@
   .steplist .shot img { width:78px; border-radius:6px; display:block; cursor:zoom-in; }
   .optline { display:flex; gap:8px; align-items:flex-start; margin-top:10px;
              font-size:13px; color:#bbb; line-height:1.4; }
+  /* the one place the app takes typed input: the lesion's name */
+  .tfield { width:100%; padding:12px 10px; margin-top:6px; font-size:16px;
+            color:#eee; background:#262626; border:1px solid #4a4a4a;
+            border-radius:10px; }
+  .tfield::placeholder { color:#777; }
+  /* existing lesions to add a photo to. Each is a wide button carrying its own
+     second line, so the name and its history read as one target. */
+  .caselist { max-height:46vh; overflow-y:auto; }
+  .caselist button { text-align:left; line-height:1.35; }
+  .caselist .sub { display:block; font-size:12px; font-weight:400;
+                   color:#b0bec5; margin-top:3px; }
+  /* which lesion a row of saved measurements belongs to. Spans the gallery's
+     two columns so it reads as a heading over them, not as a tile. */
+  .ghead { grid-column:1/-1; font-size:13px; font-weight:700; color:#a5d6a7;
+           margin:4px 0 0; padding-top:8px; border-top:1px solid #333; }
+  .ghead:first-child { border-top:0; padding-top:0; }
+  .ghead .n { font-weight:400; color:#9e9e9e; }
   .optline input { width:20px; height:20px; flex:0 0 auto; margin:0; }
   /* full-screen view of one comparison image. The id beats .hidden on
      specificity, so the hidden state has to be spelled out for the id too. */
@@ -255,6 +272,13 @@
   <section id="stage-pick" class="card hidden">
     <span class="badge" id="pick-badge">Choose an image</span>
     <p class="instruct" id="pick-instruct"></p>
+    <!-- Photographing skin at an angle foreshortens both the lesion and the
+         ruler, and the scale then comes out wrong across the frame. Only worth
+         saying where a photo is actually about to be taken, so it is hidden
+         when the camera is not on offer. -->
+    <p class="warn hidden" id="pick-tip">Tip: hold the phone perpendicular to the
+      skin — flat and square to the surface, not tilted — with the ruler lying
+      beside the lesion in the same plane.</p>
     <!-- two inputs: `capture` forces the camera, so device-gallery access needs
          an input without it. They live here, next to the buttons that use them. -->
     <input id="file" type="file" accept="image/*" capture="environment" class="hidden">
@@ -262,6 +286,35 @@
     <div class="row tight"><button id="pick-cam">Take a photo</button>
       <button id="pick-file" class="secondary">From device</button>
       <button id="pick-demo" class="secondary">Demo photo</button></div>
+  </section>
+
+  <!-- Which lesion the photo is of. Asked at import, because that is the only
+       moment anyone can answer it: a month later a photo of the same mole is
+       indistinguishable from a photo of a different one, and "compare over
+       time" is meaningless unless the app knows which photos belong together.
+       The name is asked for as a body location for the same reason -- a
+       filename does not tell you which mole it was. -->
+  <section id="stage-case" class="card hidden">
+    <span class="badge">Which lesion is this?</span>
+    <p class="instruct" id="case-instruct"></p>
+    <div class="row tight" id="case-choice">
+      <button id="case-new">New lesion</button>
+      <button id="case-old" class="secondary">Existing lesion</button>
+    </div>
+    <div id="case-new-panel" class="hidden">
+      <input id="case-name" class="tfield" type="text" maxlength="60"
+             autocomplete="off" placeholder="e.g. left forearm, near elbow">
+      <p class="hint">Say where it is on the body. That name is how you will
+        recognise this lesion later when comparing photos of it.</p>
+      <button id="case-save" disabled>Use this name</button>
+    </div>
+    <div id="case-list-panel" class="hidden">
+      <div class="caselist" id="case-list"></div>
+    </div>
+    <div class="row tight">
+      <button id="case-back" class="secondary hidden">Back</button>
+      <button id="case-cancel" class="danger">Cancel — discard this photo</button>
+    </div>
   </section>
 
   <section id="stage-library" class="card hidden">
@@ -328,11 +381,11 @@
   </div>
 </main>
 
-<script src="js/pipeline.js?v=85"></script>
-<script src="js/ruler.js?v=85"></script>
-<script src="js/genruler.js?v=85"></script>
-<script src="js/skinopus.js?v=85"></script>
-<script src="js/library.js?v=85"></script>
+<script src="js/pipeline.js?v=86"></script>
+<script src="js/ruler.js?v=86"></script>
+<script src="js/genruler.js?v=86"></script>
+<script src="js/skinopus.js?v=86"></script>
+<script src="js/library.js?v=86"></script>
 <script>
 let cvReady=false, img=new Image(), lesion=null;
 const $=id=>document.getElementById(id);
@@ -351,7 +404,7 @@ const APP_VERSION=(()=>{
   return m?m[1]:"?";
 })();
 $("appver").textContent=`v${APP_RELEASE} (build ${APP_VERSION})`;
-const STAGES=["stage-capture","stage-settings","stage-box","stage-lmanual","stage-review","stage-rulerbox","stage-ticks","stage-blurry","stage-final","stage-genruler","stage-colour","stage-pick","stage-library","stage-steps","stage-gallery","stage-compare","spinner"];
+const STAGES=["stage-capture","stage-settings","stage-case","stage-box","stage-lmanual","stage-review","stage-rulerbox","stage-ticks","stage-blurry","stage-final","stage-genruler","stage-colour","stage-pick","stage-library","stage-steps","stage-gallery","stage-compare","spinner"];
 // Two taps instead of confirm(), for the same reason the reset button uses
 // them: a muted dialog reports "cancelled" and the button dies quietly.
 const _disarms=[];
@@ -606,6 +659,112 @@ function setupPinchZoom(canvasId,redraw,onPinchStart){
   return ()=>ptrs.size>=2;
 }
 
+// ---------- lesions (cases) ------------------------------------------------
+// A "case" is one lesion on one body, named by where it is. Every image is
+// filed under one at import, and every measurement inherits it, which is what
+// makes "compare over time" mean anything: two photos are comparable because
+// they are of the same lesion, not because they happen to be the two the user
+// tapped. Names live in localStorage -- a handful of short strings, nowhere
+// near needing IndexedDB, and they have to be readable before any image is.
+const CASES_KEY="cases";
+function loadCases(){try{return JSON.parse(localStorage.getItem(CASES_KEY)||"[]");}catch(e){return [];}}
+function writeCases(l){try{localStorage.setItem(CASES_KEY,JSON.stringify(l));return true;}catch(e){return false;}}
+// Same name typed twice is the same lesion, not two -- otherwise "existing"
+// fills up with duplicates that can never be compared against each other.
+function addCase(name){
+  const l=loadCases();
+  const hit=l.find(c=>c.name.toLowerCase()===name.toLowerCase());
+  if(hit) return hit;
+  const c={id:"c"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
+           name:name, createdAt:new Date().toISOString()};
+  l.push(c); writeCases(l); return c;
+}
+// How much history each lesion already carries, for the "existing" list.
+function caseStats(){
+  const st={};
+  loadResults().forEach(r=>{
+    if(!r.caseId) return;
+    const e=st[r.caseId]||(st[r.caseId]={n:0,last:null});
+    e.n++;
+    if(!e.last||new Date(r.t)>new Date(e.last)) e.last=r.t;
+  });
+  return st;
+}
+const esc=v=>String(v==null?"":v).replace(/[&<>"]/g,
+  c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+// The image waiting to be filed, and what to do once it is.
+let caseRec=null, caseThen=null;
+// The lesion the run in progress belongs to, copied onto its measurement.
+let currentCase=null;
+const CASE_ASK="Is this a new lesion, or another photo of one you have measured before?";
+function caseMode(mode){                    // "choice" | "new" | "list"
+  $("case-choice").classList.toggle("hidden",mode!=="choice");
+  $("case-new-panel").classList.toggle("hidden",mode!=="new");
+  $("case-list-panel").classList.toggle("hidden",mode!=="list");
+  $("case-instruct").textContent =
+      mode==="new"  ? "Name it by where it is on the body."
+    : mode==="list" ? "Which lesion is this another photo of?"
+                    : CASE_ASK;
+  // Nothing to go back to when there were no existing lesions to choose from:
+  // the naming panel was the whole question, not one branch of it.
+  $("case-back").classList.toggle("hidden", mode==="choice"||!loadCases().length);
+}
+function renderCaseList(){
+  const st=caseStats();
+  const when=c=>new Date((st[c.id]&&st[c.id].last)||c.createdAt);
+  const box=$("case-list"); box.innerHTML="";
+  loadCases().slice().sort((a,b)=>when(b)-when(a)).forEach(c=>{
+    const e=st[c.id]||{n:0,last:null};
+    const b=document.createElement("button");
+    b.className="secondary";
+    b.textContent=c.name;                  // typed by the user -- never innerHTML
+    const sub=document.createElement("span");
+    sub.className="sub";
+    sub.textContent = e.n ? `${e.n} measurement${e.n===1?"":"s"} · last ${fmtDate(e.last)}`
+                          : "no measurements yet";
+    b.appendChild(sub);
+    b.onclick=()=>chooseCase(c);
+    box.appendChild(b);
+  });
+}
+// Ask, then hand the image on. With no lesions on file yet the question has
+// only one answer, so skip it and go straight to naming.
+function askCase(rec,then){
+  caseRec=rec; caseThen=then;
+  $("case-name").value=""; $("case-save").disabled=true;
+  caseMode(loadCases().length?"choice":"new");
+  show("stage-case");
+}
+async function chooseCase(c){
+  const rec=caseRec, then=caseThen;
+  caseRec=null; caseThen=null;
+  if(!rec){ show("stage-pick"); return; }
+  show("spinner");
+  currentCase={id:c.id,name:c.name};
+  // Filed on the original itself, so the lesion survives a reload and any
+  // later step run on the same image inherits it without asking again.
+  rec.caseId=c.id; rec.caseName=c.name;
+  try{ await libPut("originals",rec); }
+  catch(e){ setStatus("couldn't file that photo under a lesion: "+e); }
+  then();
+}
+$("case-new").onclick=()=>{ caseMode("new"); $("case-name").focus(); };
+$("case-old").onclick=()=>{ renderCaseList(); caseMode("list"); };
+$("case-back").onclick=()=>caseMode("choice");
+$("case-name").addEventListener("input",()=>{
+  $("case-save").disabled=!$("case-name").value.trim(); });
+$("case-name").addEventListener("keydown",e=>{
+  if(e.key==="Enter"&&$("case-name").value.trim()){ e.preventDefault(); $("case-save").click(); } });
+$("case-save").onclick=()=>chooseCase(addCase($("case-name").value.trim()));
+// Backing out has to take the image with it: it was imported before the
+// question was asked, and an unfiled photo would sit in the library forever.
+$("case-cancel").onclick=async()=>{
+  const rec=caseRec; caseRec=null; caseThen=null;
+  show("stage-pick");
+  if(rec){ try{ await libForget(rec.id); libUpdateUI(); }catch(e){} }
+};
+
 // ---------- where the image for a step comes from --------------------------
 // Every processing entry point goes through here. It used to also show the
 // library as a grid of thumbnails with a "Use this image" button; that is gone.
@@ -633,6 +792,7 @@ function openPicker(step,title,note,then){
   if(srcs.length===1){ srcs[0].click(); return; }
   $("pick-badge").textContent=title;
   $("pick-instruct").textContent=note+sourceSentence();
+  $("pick-tip").classList.toggle("hidden",$("pick-cam").classList.contains("hidden"));
   show("stage-pick");
 }
 // the steps a lineage already carries -- "Standard" when it carries none
@@ -697,11 +857,13 @@ $("set-reset").onclick=async()=>{
     const imgs=(await libAll("originals")).length;
     const meas=loadResults().length;
     const fails=JSON.parse(localStorage.getItem("faillog")||"[]").length;
+    const lesions=loadCases().length;
     resetArmed=true;
     $("set-reset").textContent="Yes — delete it all";
     $("reset-cancel").classList.remove("hidden");
     $("reset-hint").textContent=
       `About to delete ${imgs} image${imgs===1?"":"s"} in the libraries, `
+      +`${lesions} named lesion${lesions===1?"":"s"}, `
       +`${meas} saved measurement${meas===1?"":"s"}, `
       +`${fails} logged failure${fails===1?"":"s"}, and put the switches above `
       +`back to their defaults. This cannot be undone — tap again to confirm.`;
@@ -710,11 +872,12 @@ $("set-reset").onclick=async()=>{
   try{
     await libClearAll();
     localStorage.removeItem(RESULTS_KEY);
+    localStorage.removeItem(CASES_KEY);
     localStorage.removeItem("faillog");
     localStorage.removeItem(SETTINGS_KEY);
   }catch(e){ setStatus("reset failed: "+e); return; }
   // every id and selection now points at something that is gone
-  currentLibId=null; lastSavedId=null; gsel=[]; libSel=null;
+  currentLibId=null; lastSavedId=null; gsel=[]; libSel=null; currentCase=null;
   settings={...DEFAULTS};
   applySettings(); updateFailUI(); disarmReset();
   show("stage-capture");            // refreshes the menu's counts on the way in
@@ -729,7 +892,7 @@ const onPicked=async e=>{
   const f=e.target.files[0]; if(!f) return;
   e.target.value="";
   show("spinner");
-  try{ const rec=await libImport(f,f.name); await usePicked(rec.id); }
+  try{ const rec=await libImport(f,f.name); askCase(rec,()=>usePicked(rec.id)); }
   catch(err){ setStatus("couldn't read that image: "+err); show("stage-pick"); }
 };
 $("file").addEventListener("change",onPicked);
@@ -751,6 +914,11 @@ $("pick-demo").onclick=async()=>{
   try{
     const b=await (await fetch("half.jpg")).blob();
     const rec=await libImport(b,"demo:half.jpg");
+    // Not anybody's lesion, so it is not worth asking about: it files itself
+    // under one fixed name, which still lets two demo runs be compared.
+    const c=addCase("Demo photo");
+    rec.caseId=c.id; rec.caseName=c.name; currentCase={id:c.id,name:c.name};
+    await libPut("originals",rec);
     await usePicked(rec.id);
   }catch(err){ setStatus("couldn't load the demo photo: "+err); show("stage-pick"); }
 };
@@ -764,6 +932,7 @@ async function usePicked(id){
   const [blob,o]=await Promise.all([libWorkBlob(id),libGet("originals",id)]);
   if(!blob){ setStatus("that image is no longer in the library"); show("stage-pick"); return; }
   currentLibId=id; imgName=o?o.name:"(photo)";
+  currentCase = o&&o.caseId ? {id:o.caseId,name:o.caseName} : null;
   const im=await libBlobToImage(blob);
   pickThen(im);
 }
@@ -1185,7 +1354,9 @@ function finalize(p){
   // crop last, so the centred label is part of the comparison image
   const crop=lesionCrop(p.pxPerCm,dia);
   $("final-method").textContent="Result — ruler-calibrated";
-  $("fstats").innerHTML=`Diameter (widest): <b>${dia.toFixed(1)} mm</b><br>Area: <b>${areaMm2.toFixed(1)} mm²</b><br>`+
+  $("fstats").innerHTML=
+    (currentCase?`Lesion: <b>${esc(currentCase.name)}</b><br>`:"")+
+    `Diameter (widest): <b>${dia.toFixed(1)} mm</b><br>Area: <b>${areaMm2.toFixed(1)} mm²</b><br>`+
     `Equivalent circle: ${equivDia.toFixed(1)} mm<br>`+
     `Scale: ${p.pxPerCm.toFixed(0)} px/cm<br>Lesion area: ${Math.round(lesion.areaPx).toLocaleString()} px`;
   const saved=storeResult(areaMm2,dia,p.pxPerCm,crop);
@@ -1251,6 +1422,10 @@ function storeResult(areaMm2,dia,pxPerCm,crop){
   const list=loadResults();
   lastSavedId=Date.now();
   list.push({ id:lastSavedId, t:new Date().toISOString(), name:imgName,
+              // which lesion this is a measurement OF -- the axis the
+              // comparison screen groups on
+              caseId:currentCase?currentCase.id:null,
+              caseName:currentCase?currentCase.name:null,
               areaMm2:+areaMm2.toFixed(1), diaMm:+dia.toFixed(1),
               // how diaMm was measured. Records written before the switch have
               // no dm and hold an equal-area-circle diameter, which reads
@@ -1279,35 +1454,65 @@ function updateCompareUI(){
 
 // ---------- gallery: pick two or more saved results ----------
 let gsel=[];
+// Which lesion a measurement belongs to, as one key. Records saved before
+// lesions were named have none, and are grouped together under that fact
+// rather than being silently mixed in with a named one.
+const caseKey=r=>r.caseId||"__unfiled";
 function renderGallery(){
   const list=loadResults().slice().sort((a,b)=>new Date(b.t)-new Date(a.t));
   const g=$("gallery");
   g.innerHTML = list.length ? "" : '<p class="hint">No saved measurements yet.</p>';
+  // Grouped by lesion, because two photos are only worth comparing when they
+  // are of the same one -- side by side in the list, they are easy to pick as
+  // a set, and a heading says out loud which lesion a row is.
+  const groups=[];
   list.forEach(r=>{
-    const i=gsel.indexOf(r.id);
-    const d=document.createElement("div");
-    d.className="gitem"+(i>=0?" sel":"");
-    d.innerHTML=`<img src="${r.img}" alt="">
-      <div class="meta">${fmtDate(r.t)}<br><b>${r.diaMm} mm</b> · ${r.areaMm2} mm²
-      ${i>=0?`<div class="pick">selected #${i+1}</div>`:""}</div>`;
-    // Any number of picks, not just two: tapping adds, tapping again removes.
-    // The old version dropped the oldest pick once two were held, which made a
-    // third tap look like the app had lost one.
-    d.onclick=()=>{
-      const at=gsel.indexOf(r.id);
-      if(at>=0) gsel.splice(at,1);
-      else gsel.push(r.id);
-      renderGallery();
-    };
-    g.appendChild(d);
+    const k=caseKey(r);
+    let grp=groups.find(x=>x.key===k);
+    if(!grp) groups.push(grp={key:k, name:r.caseName||"Not filed under a lesion", items:[]});
+    grp.items.push(r);
+  });
+  groups.forEach(grp=>{
+    const h=document.createElement("div");
+    h.className="ghead";
+    h.textContent=grp.name;
+    const n=document.createElement("span");
+    n.className="n";
+    n.textContent=` · ${grp.items.length} measurement${grp.items.length===1?"":"s"}`;
+    h.appendChild(n);
+    g.appendChild(h);
+    grp.items.forEach(r=>{
+      const i=gsel.indexOf(r.id);
+      const d=document.createElement("div");
+      d.className="gitem"+(i>=0?" sel":"");
+      d.innerHTML=`<img src="${r.img}" alt="">
+        <div class="meta">${fmtDate(r.t)}<br><b>${r.diaMm} mm</b> · ${r.areaMm2} mm²
+        ${i>=0?`<div class="pick">selected #${i+1}</div>`:""}</div>`;
+      // Any number of picks, not just two: tapping adds, tapping again removes.
+      // The old version dropped the oldest pick once two were held, which made a
+      // third tap look like the app had lost one.
+      d.onclick=()=>{
+        const at=gsel.indexOf(r.id);
+        if(at>=0) gsel.splice(at,1);
+        else gsel.push(r.id);
+        renderGallery();
+      };
+      g.appendChild(d);
+    });
   });
   disarmGalDel();                       // the selection just changed under it
   $("gal-go").disabled=gsel.length<2;
   $("gal-go").textContent = gsel.length>2 ? `Compare ${gsel.length}` : "Compare";
   $("gal-del").disabled=gsel.length===0;
-  $("gal-instruct").textContent = gsel.length===0 ? "Pick two or more saved measurements to compare."
+  // Comparing two different lesions produces a growth figure that means
+  // nothing. It is still allowed -- the old records have no lesion at all --
+  // but it is said plainly rather than left to be noticed.
+  const sel=list.filter(r=>gsel.includes(r.id));
+  const mixed=new Set(sel.map(caseKey)).size>1;
+  $("gal-instruct").textContent = (gsel.length===0 ? "Pick two or more saved measurements to compare."
     : gsel.length===1 ? "Pick at least one more."
-    : `${gsel.length} picked — tap Compare.`;
+    : `${gsel.length} picked — tap Compare.`)
+    + (mixed ? " These are different lesions — a change between them is not a real change." : "");
 }
 $("compare-open").onclick=()=>{gsel=[];renderGallery();show("stage-gallery");};
 $("gal-back").onclick=()=>show("stage-capture");
@@ -1677,7 +1882,16 @@ $("gal-go").onclick=()=>{
   const sameCrop=allCropped&&crops.every(c=>c===crops[0]);
   const cropList=[...new Set(crops.filter(Boolean))].join(" mm, ")+" mm";
   const methods=new Set(set.map(r=>r.dm||"equiv"));
-  $("cmp-delta").innerHTML=
+  // Which lesion this is about, so a comparison read on its own is not
+  // ambiguous -- and a loud warning when the set spans more than one.
+  const names=[...new Set(set.map(r=>r.caseName).filter(Boolean))];
+  const mixedCase=new Set(set.map(caseKey)).size>1;
+  const who = mixedCase
+    ? `<span class="grew">These photos are not all of the same lesion${
+         names.length?" ("+names.map(esc).join(", ")+")":""} — the change below
+       compares different things.</span><br>`
+    : names.length ? `<span class="hint">Lesion: <b>${esc(names[0])}</b></span><br>` : "";
+  $("cmp-delta").innerHTML= who+
     `<span class="big ${cls}">${word}</span>`+
     (n>2?`<span class="hint">Across ${n} photos, earliest to latest.</span><br>`:"")+
     `Diameter: ${a.diaMm} → ${b.diaMm} mm (<b>${sgn(dDia)} mm</b>, ${sgn(pctDia)}%)<br>`+
